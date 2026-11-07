@@ -1,0 +1,148 @@
+// 工单详情页文案：按钮、提示、字段标签与状态说明。
+export default {
+  ticketDetail: {
+    loading: "加载中…",
+    // 列表拼接分隔符：中文用顿号，英文用逗号加空格。
+    listSeparator: "、",
+    action: {
+      back: "返回",
+      submit: "提交审批",
+      approve: "批准",
+      reject: "拒绝",
+      retryPublish: "重试发布",
+      rollback: "发起回滚",
+      abandon: "废弃",
+      rearm: "重新轮询",
+      copy: "复制",
+      cancel: "取消",
+    },
+    // 回滚入口的禁用说明（后端会拒绝不支持的类型，这里提前讲清楚原因）。
+    rollbackUnsupported: {
+      type: "该工单类型不支持回滚：它的声明没有落在单一文件上，回滚无法撤销任何资源。请用对应的正向工单撤销（批量纳管请逐个策略发起解绑）。",
+      attach: "「挂载」工单没有回滚路径：撤销挂载请另开一张解绑（detach）工单。",
+    },
+    field: {
+      type: "类型",
+      principal: "主体",
+      submitter: "提交人",
+      approvalMode: "审批模式",
+      approvalModeAuto: "自动",
+      approvalModeManual: "人工",
+      approvers: "审批人",
+      pollCount: "轮询次数",
+      gitRepository: "Git 仓库",
+      pr: "PR",
+      closureReason: "关闭原因",
+      closureComment: "关闭备注",
+      createdAt: "创建时间",
+      updatedAt: "更新时间",
+    },
+    request: {
+      title: "请求详情",
+      operation: {
+        attach: "挂载",
+        detach: "解绑（销毁挂载关系）",
+      },
+      label: {
+        operationType: "操作类型",
+        targetTicket: "目标工单",
+        sourceTicket: "源工单",
+        managedPolicy: "托管策略",
+        targetPolicy: "目标策略",
+        targetGroup: "目标组",
+        roleInlinePolicies: "本次批量导入的角色内嵌策略",
+        inlinePolicyName: "内联策略名",
+        policyDocument: "策略文档",
+      },
+      policyDocumentSize: "{{bytes}} 字节（见下方 Terraform）",
+      detachWarning:
+        "解绑会清空源挂载工单的 Terraform 文件，terraform plan 将销毁该挂载关系。",
+    },
+    approval: {
+      waiting: "等待审批",
+      waitingApprovers: "等待 {{approvers}} 审批",
+      decidedWaiting: "你已{{decision}}，等待 {{approvers}} 表态",
+      allDecided: "全部审批人已表态，工单即将进入已批准状态",
+      noRepeatHint: "无需重复操作；所有指定审批人表态后工单会自动进入下一状态。",
+      decision: {
+        approve: "批准",
+        reject: "拒绝",
+      },
+      approved: "已批准",
+      rejected: "已拒绝",
+      pending: "待审批",
+    },
+    approvalRecords: {
+      title: "审批记录",
+      empty: "暂无审批记录",
+      you: "（你）",
+    },
+    terraform: {
+      title: "Terraform 代码",
+      previewBadge: "预览（工单尚未发布）",
+      previewDesc: "工单发布后，PR 中的 Terraform 文件内容与本预览一致。",
+      previewFailed: "预览生成失败：{{error}}",
+      empty: "工单发布后在此生成 Terraform 文件内容。",
+    },
+    poll: {
+      stopped: "轮询已停止（7 天内 PR 未合并）",
+      stoppedDesc:
+        "工单保持「已发布」状态，PR 依然可以合并。若需要继续跟踪合并状态，请点击「重新轮询」开启新的 7 天观察窗口。",
+    },
+    applyFailed: {
+      title: "Terraform apply 失败，变更未生效",
+      desc: "PR 已合并到主分支，但 CI 的 terraform apply 失败了（commit {{commit}}）。AWS 上的资源没有被创建/修改，工单保持「已发布」等待处置：修复后重新走流程，或人工关单 / 放弃该工单。",
+      viewCI: "查看 CI 运行",
+      noCommit: "未知",
+    },
+    pollStatus: {
+      title: "Git 轮询状态",
+      empty: "暂无轮询记录",
+      mergeState: "合并状态",
+      ci: "CI",
+      applyResult: "应用结果",
+      attempt: "第 {{attempt}} 次轮询",
+    },
+    mergeState: {
+      open: "开启中",
+      merged: "已合并",
+      closed: "已关闭",
+      locked: "已锁定",
+      unknown: "未知",
+    },
+    applyResult: {
+      pending: "等待合并",
+      succeeded: "已应用",
+      failed: "失败",
+      unknown: "未知",
+    },
+    success: {
+      submitted: "已提交审批",
+      abandoned: "工单已废弃关闭",
+      applied: "工单已标记为已应用并关闭",
+      publishRetried: "已重新触发发布",
+      rearm: "已重新开始轮询 Git 状态",
+      copied: "已复制到剪贴板",
+    },
+    error: {
+      copyFailed: "复制失败",
+    },
+    modal: {
+      approveTitle: "批准工单",
+      rejectTitle: "拒绝工单",
+      commentLabel: "审批意见",
+      commentPlaceholder: "可选",
+      abandonTitle: "废弃该工单？",
+      abandonWarningWithPr:
+        "该工单已生成 PR。若 PR 仍处于开启状态，需先在代码宿主关闭 PR 后才能废弃；PR 已合并则不能废弃。",
+      abandonWarning: "废弃后工单关闭且不可恢复。",
+      abandonCommentPlaceholder: "废弃原因备注（可选）",
+      appliedTitle: "标记为已应用并关单",
+      appliedWarning:
+        "仅在你已在 main 工作副本完成 terraform apply 且结果无误后使用。关单后工单进入终态，可作为回滚目标。",
+      appliedTriggerSync: "关单后触发该账号的资产同步",
+      appliedTriggerSyncHint: "关单后立即触发（你已确认 apply 完成）；已有在途同步时不会重复排队。",
+      appliedCommentPlaceholder: "备注（可选，例如 apply 的 PR/commit 号）",
+    },
+  },
+};

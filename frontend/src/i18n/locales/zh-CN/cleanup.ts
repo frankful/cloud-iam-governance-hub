@@ -1,0 +1,92 @@
+// 待清理清单页文案：平台声明错的、AWS 侧留下没用的资源。
+export default {
+  cleanup: {
+    title: "待清理清单",
+    subtitle: "平台声明错的、AWS 侧留下没用的资源。清单只读：删除动作在 IaC 仓库和 AWS 控制台执行，平台只负责给出证据和具体命令。",
+    filter: {
+      account: "选择账号",
+    },
+    snapshot: "库存快照：同步 run #{{run}}",
+    stat: {
+      platformFile: "待删声明文件",
+      awsResource: "待删 AWS 资源",
+      high: "可直接执行",
+      review: "需确认",
+    },
+    category: {
+      "platform-file": "删声明文件",
+      "aws-resource": "删 AWS 资源",
+    },
+    confidence: {
+      high: "可直接执行",
+      review: "需确认",
+    },
+    kind: {
+      role: "IAM 角色",
+      user: "IAM 用户",
+      group: "IAM 用户组",
+      policy: "客户自管策略",
+      "instance-profile": "实例配置文件",
+      "oidc-provider": "OIDC 身份提供方",
+      "saml-provider": "SAML 身份提供方",
+    },
+    column: {
+      category: "类别",
+      confidence: "置信度",
+      kind: "类型",
+      name: "资源",
+      reason: "为什么要删",
+    },
+    detail: {
+      evidence: "证据",
+      action: "建议动作",
+      pr: "关联 PR",
+    },
+    empty: "没有需要清理的资源",
+    gaps: {
+      title: "判定覆盖不到的地方",
+    },
+    // ---- 服务端 reason_code / action_code / evidence.code 的翻译 ----
+    // 服务端同时下发原文（reason/action/evidence[].text），这里的 key 缺失时
+    // 前端自动退回原文，因此两边可以独立演化。
+    reason: {
+      "platform-file": "平台为它生成过声明，但该资源由 AWS 服务托管生命周期，声明无法维持",
+      "profile-no-role": "实例配置文件没有绑定任何角色，是一个空壳",
+      "profile-role-gone": "实例配置文件绑定的角色在账号里已不存在",
+      "profile-eks-review": "同一角色下共 {{group_size}} 个 EKS 自动创建的实例配置文件，实际只可能有 1 个在用；本条是其中之一",
+      "profile-eks-unused": "同角色已确认有一个实例配置文件正在被节点组使用，本条未被任何 launch template 引用",
+      "profile-eks-unused-role-idle": "同角色没有任何实例配置文件被 launch template 引用，角色也没有节点组在用",
+      "profile-eks-orphan": "EKS 自动创建的实例配置文件未被任何 launch template 引用，绑定角色也没有节点组在用，是重建留下的孤儿",
+      "profile-eks-ambiguous": "绑定角色仍被节点组使用，但本条未被任何 launch template 引用：可能节点组刚重建，证据未对齐",
+      "group-empty-plain": "用户组没有任何成员、也没有挂载任何策略，是纯空壳",
+      "group-empty-policies": "用户组没有任何成员，但仍挂着策略：可能是预建待用，也可能是无人清理的旧组",
+    },
+    action: {
+      "delete-file": "从 IaC 仓库删除该声明文件并归档工单；AWS 侧资源保持不动",
+      "delete-profile": "aws iam delete-instance-profile --instance-profile-name {{name}}",
+      "delete-profile-verify": "先用 aws eks describe-nodegroup 与 launch template 确认在用项，其余用 aws iam delete-instance-profile 删除",
+      "delete-group": "aws iam delete-group --group-name {{name}}",
+      "delete-group-detach": "确认无用后先 detach 策略再删除：aws iam delete-group --group-name {{name}}",
+    },
+    evidence: {
+      "baseline-reason": "{{reason}}",
+      ticket: "平台工单 {{ticket}}（{{type}} / {{status}}）",
+      "pr-merged": "已合并 PR：{{pr}}",
+      "pr-missing": "工单没有关联 PR：文件可能只在草稿里，或由人工补写",
+      file: "声明文件：{{file}}",
+      "no-role-arn": "role_arn 为空",
+      "role-arn": "绑定角色：{{arn}}",
+      "role-missing": "库存中找不到该角色（可能已被删除）",
+      siblings: "同角色共 {{count}} 个：{{names}}",
+      others: "其余：{{names}}",
+      "eks-rebuild-note": "EKS 每重建一次托管节点组就新建一个 UUID 命名的实例配置文件，旧的不清理",
+      "in-use": "在用项：{{names}}（被 launch template 引用）",
+      "role-nodegroups": "角色仍被节点组使用：{{nodegroups}}",
+      "usage-unavailable": "EKS/EC2 侧证据不可用（详情见原文）",
+      "group-stats": "成员 {{members}}；挂载策略 {{policies}} 条",
+    },
+    error: {
+      accounts: "加载 AWS 账号失败",
+    },
+  },
+};

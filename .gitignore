@@ -1,0 +1,22 @@
+.env
+*.log
+*.exe
+*.exe~
+*.err
+*~
+.run/
+bootstrap-admin-token.txt
+# 交叉编译产物目录（cmd/* 的 linux/windows 二进制）
+out/
+
+# WorkBuddy agent workspace (work logs, skills): local-only, may contain
+# operational details that must not be committed.
+.workbuddy/
+
+# 运行残留与编译产物：日志/错误输出、Windows 可执行、E2E 造数快照、
+# 会话状态。一律不入库（历史上曾误跟踪，2026-11-06 F1 公开前置清理移出）。
+*.log
+*.err
+*.exe
+.e2e-*
+.session-state.md

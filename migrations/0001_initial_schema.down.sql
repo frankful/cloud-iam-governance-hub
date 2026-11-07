@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS ticket_approval;
+DROP TABLE IF EXISTS iam_ticket;
+DROP TABLE IF EXISTS iam_access_log;
+DROP TABLE IF EXISTS iam_risk;
+DROP TABLE IF EXISTS iam_relationship;
+DROP TABLE IF EXISTS iam_principal_policy;
+DROP TABLE IF EXISTS iam_policy;
+DROP TABLE IF EXISTS iam_principal;
+DROP TABLE IF EXISTS aws_account;
+DROP TABLE IF EXISTS aws_organization;

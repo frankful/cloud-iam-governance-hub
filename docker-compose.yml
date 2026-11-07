@@ -1,0 +1,167 @@
+# Local / single-host deployment: postgres, redis, api (auto-migrates on
+# startup, frontend embedded) and sync-worker.
+#
+#   docker compose up -d --build
+#   API: http://127.0.0.1:${API_PORT:-8080}
+#
+# Required in .env (or environment): AWS_REGION, AUTH_MODE (development|api-token).
+# The first start with AUTH_MODE=api-token and zero active admins bootstraps an
+# admin token into ./data/bootstrap-admin-token.txt (mounted from the host, so
+# it survives image upgrades and container recreation).
+#
+# Git PR-status polling runs inside the api process. For horizontal scale-out
+# of the poller alone, start an extra container from the same finops image:
+#   docker run -d --name finops-gitstatus-worker --env-file .env \
+#     --entrypoint /app/gitstatus-worker finops
+# Shared env for the business containers: same values, single source.
+# Container-internal addresses point at the sibling service names.
+x-app-env: &app-env
+  DATABASE_URL: postgres://${POSTGRES_USER:-finops}:${POSTGRES_PASSWORD:-finops-local-only}@postgres:5432/${POSTGRES_DB:-finops}?sslmode=disable
+  REDIS_ADDR: redis:6379
+  REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+  REDIS_DB: ${REDIS_DB:-0}
+  PUBLISHER: ${PUBLISHER:-github}
+  GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+  GITHUB_REPOSITORY: ${GITHUB_REPOSITORY:-}
+  GITHUB_API_URL: ${GITHUB_API_URL:-}
+  GITHUB_TARGET_BRANCH: ${GITHUB_TARGET_BRANCH:-main}
+  GITHUB_TERRAFORM_PATH: ${GITHUB_TERRAFORM_PATH:-iam}
+  GITLAB_TOKEN: ${GITLAB_TOKEN:-}
+  GITLAB_PROJECT_ID: ${GITLAB_PROJECT_ID:-}
+  GITLAB_API_URL: ${GITLAB_API_URL:-}
+  GITLAB_TARGET_BRANCH: ${GITLAB_TARGET_BRANCH:-main}
+  GITLAB_TERRAFORM_PATH: ${GITLAB_TERRAFORM_PATH:-iam}
+  AWS_REGION: ${AWS_REGION:-us-east-1}
+  AWS_PROFILE: ${AWS_PROFILE:-}
+  # Base credential for the AWS SDK default chain: env AK/SK work out of the
+  # box in containers (no ~/.aws needed). The platform never persists them —
+  # they are only the entry credential used to sts:AssumeRole into each
+  # managed account's read-only role (per-account configs).
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+  AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+  AWS_EXTERNAL_ID: ${AWS_EXTERNAL_ID:-}
+  AWS_ROLE_SESSION_NAME: ${AWS_ROLE_SESSION_NAME:-iam-governance-collector}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: finops-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-finops}
+      POSTGRES_USER: ${POSTGRES_USER:-finops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-finops-local-only}
+    ports:
+      - "0.0.0.0:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: finops-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "0.0.0.0:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    # Single unified image (Dockerfile builds finops-api + sync-worker); the
+    # sync-worker service below reuses it with a different entrypoint, so
+    # both containers are always version-atomic.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: finops
+    entrypoint: ["/app/finops-api"]
+    container_name: finops-api
+    environment:
+      <<: *app-env
+      API_ADDR: 0.0.0.0:8080
+      # Container port publishing requires a non-loopback bind; the loopback
+      # guard stays on unless this explicit opt-in is set.
+      API_ALLOW_NON_LOOPBACK: "true"
+      AUTH_MODE: ${AUTH_MODE:-api-token}
+      IAM_CANDIDATE_RISK_MODE: ${IAM_CANDIDATE_RISK_MODE:-BLOCK}
+      BASELINE_KEEP_BRANCH: ${BASELINE_KEEP_BRANCH:-}
+      BOOTSTRAP_ADMIN_USER_ID: ${BOOTSTRAP_ADMIN_USER_ID:-admin}
+      BOOTSTRAP_ADMIN_TOKEN_TTL: ${BOOTSTRAP_ADMIN_TOKEN_TTL:-2880h}
+      BOOTSTRAP_ADMIN_TOKEN_FILE: /app/data/bootstrap-admin-token.txt
+      # env 种子：配置账号 ID 后启动时自动接入（幂等；走手工接入同一 Create
+      # 路径，连通性失败只 WARN 不阻断启动）。清库/新装环境免手工录账号。
+      BOOTSTRAP_AWS_ACCOUNT_ID: ${BOOTSTRAP_AWS_ACCOUNT_ID:-}
+      BOOTSTRAP_AWS_ACCOUNT_NAME: ${BOOTSTRAP_AWS_ACCOUNT_NAME:-}
+      BOOTSTRAP_AWS_SYNC_MODE: ${BOOTSTRAP_AWS_SYNC_MODE:-}
+      BOOTSTRAP_AWS_ROLE_ARN: ${BOOTSTRAP_AWS_ROLE_ARN:-}
+      BOOTSTRAP_AWS_SYNC_ENABLED: ${BOOTSTRAP_AWS_SYNC_ENABLED:-}
+    ports:
+      - "0.0.0.0:${API_PORT:-8080}:8080"
+    volumes:
+      # Host-mounted workdir: the bootstrap admin token file lands here and
+      # survives container recreation / image upgrades.
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  sync-worker:
+    # Same image as api (built once by the api service above); only the
+    # process entrypoint differs. No build section here, so repeated
+    # 'up -d --build' never leaves a dangling <none> image behind.
+    #
+    # pull_policy: never — without it, the first 'up --build' on a machine
+    # that has no local 'finops' image yet tries to pull it from Docker Hub
+    # before building, and prints "pull access denied for finops". The image
+    # is built by the api service in the same invocation, so there is nothing
+    # to pull; the container is created after the build finishes.
+    image: finops
+    pull_policy: never
+    entrypoint: ["/app/sync-worker"]
+    container_name: finops-sync-worker
+    # Scale-out note: a fixed container_name blocks `--scale sync-worker=N`.
+    # Remove this line (and publish no fixed health port) before scaling; the
+    # worker itself is stateless and asynq distributes tasks safely across
+    # instances.
+    environment:
+      <<: *app-env
+      SYNC_WORKER_HEALTH_ADDR: 0.0.0.0:8081
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+    depends_on:
+      # The api applies pending migrations on startup and its /healthz only
+      # turns green after the schema gate passes, so this orders migration
+      # before the worker without a separate migrate service.
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8081/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
