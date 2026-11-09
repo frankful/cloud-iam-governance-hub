@@ -190,6 +190,10 @@ func writeAWSAccountConfigError(context *gin.Context, err error) {
 	case errors.Is(err, service.ErrAWSAccountConfigChanged):
 		writeError(context, http.StatusConflict, "AWS account configuration changed; retry the operation")
 	case errors.Is(err, service.ErrAWSAccountConnectivity):
+		// The generic 422 body hides the STS-level cause; log it so operators
+		// can tell AccessDenied / bad region / unreachable STS apart.
+		slog.Warn("AWS account connectivity validation failed",
+			"error", err, "method", context.Request.Method, "path", context.Request.URL.Path)
 		writeError(context, http.StatusUnprocessableEntity, "AWS account connectivity validation failed")
 	default:
 		var validationError *service.AWSAccountConfigValidationError

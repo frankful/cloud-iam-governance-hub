@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [0.1.8] — 2026-11-09
+
+### Fixed
+
+- The "AWS account connectivity validation failed" response no longer
+  swallows the STS-level cause: the handler logs the underlying error
+  (AccessDenied vs. bad region vs. unreachable STS) at WARN.
+- `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` are now passed through to the
+  api and sync-worker containers. Runtime containers on the docker bridge
+  bypass host transparent-proxy/TUN devices — AWS calls fail with TLS
+  "unexpected eof" inside the container while the same request succeeds on
+  the host. Set `HTTPS_PROXY` in `.env` to a proxy listening on a
+  non-loopback address; `NO_PROXY` defaults to loopback + `postgres`/`redis`.
+
 ## [0.1.7] — 2026-11-09
 
 ### Fixed

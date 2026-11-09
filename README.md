@@ -84,7 +84,12 @@ fetches.
 If `curl` works on the host but every HTTPS fetch inside the build fails
 with `EOF` (hosts whose outbound traffic runs through a transparent proxy /
 TUN device that docker bridge containers bypass), the compose build already
-uses `network: host`; for a plain `docker build`, add `--network host`.
+uses `network: host`; for a plain `docker build`, add `--network host`. The
+same applies at **runtime**: containers calling AWS/GitHub get the same
+reset. Set `HTTPS_PROXY` in `.env` to a proxy listening on a non-loopback
+address (e.g. `http://172.17.0.1:7890`, the docker0 gateway to a host-side
+proxy); `NO_PROXY` defaults to keeping loopback and the internal
+`postgres`/`redis` services direct.
 
 On a small build VM (1-2 GB RAM, no swap), the Go build step can be
 OOM-killed and fail with `signal: killed`. The build caps compiler

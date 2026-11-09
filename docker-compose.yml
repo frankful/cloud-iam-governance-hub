@@ -42,6 +42,15 @@ x-app-env: &app-env
   AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
   AWS_EXTERNAL_ID: ${AWS_EXTERNAL_ID:-}
   AWS_ROLE_SESSION_NAME: ${AWS_ROLE_SESSION_NAME:-iam-governance-collector}
+  # Outbound HTTP(S) proxy for AWS/GitHub calls. Runtime containers on the
+  # docker bridge bypass host transparent-proxy/TUN devices (same symptom as
+  # the build steps: TLS "unexpected eof" / connection reset while the same
+  # curl succeeds on the host). Set HTTPS_PROXY in .env to the host proxy
+  # listening on a non-loopback address; NO_PROXY keeps internal traffic
+  # (postgres, redis) and loopback direct.
+  HTTP_PROXY: ${HTTP_PROXY:-}
+  HTTPS_PROXY: ${HTTPS_PROXY:-}
+  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,postgres,redis}
 
 services:
   postgres:
