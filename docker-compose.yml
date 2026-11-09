@@ -98,7 +98,7 @@ services:
       IAM_CANDIDATE_RISK_MODE: ${IAM_CANDIDATE_RISK_MODE:-BLOCK}
       BASELINE_KEEP_BRANCH: ${BASELINE_KEEP_BRANCH:-}
       BOOTSTRAP_ADMIN_USER_ID: ${BOOTSTRAP_ADMIN_USER_ID:-admin}
-      BOOTSTRAP_ADMIN_TOKEN_TTL: ${BOOTSTRAP_ADMIN_TOKEN_TTL:-2880h}
+      BOOTSTRAP_ADMIN_TOKEN_TTL: ${BOOTSTRAP_ADMIN_TOKEN_TTL:-720h}
       BOOTSTRAP_ADMIN_TOKEN_FILE: /app/data/bootstrap-admin-token.txt
       # env 种子：配置账号 ID 后启动时自动接入（幂等；走手工接入同一 Create
       # 路径，连通性失败只 WARN 不阻断启动）。清库/新装环境免手工录账号。

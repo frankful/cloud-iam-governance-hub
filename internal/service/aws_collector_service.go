@@ -819,7 +819,8 @@ func NewAWSCollectorService(
 	}
 	awsConfig, err := config.LoadDefaultConfig(ctx, loadOpts...)
 	if err != nil {
-		return nil, fmt.Errorf("load AWS SDK configuration: %w", err)
+		return nil, fmt.Errorf("load AWS SDK configuration: %w (%s)",
+			err, EntryCredentialHint(collectorConfig.Profile))
 	}
 
 	iamFactory := func(memberConfig aws.Config) awsIAMAPI {

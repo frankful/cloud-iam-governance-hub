@@ -175,6 +175,13 @@ func run(config workerConfig, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("create AWS collector: %w", err)
 	}
+	// 入口身份是首次部署最常见的卡点（找不到凭证时 SDK 报 "failed to refresh
+	// cached credentials"，完全不提它在找什么）。把这行打进日志，出问题时
+	// 第一眼就能确认平台到底用的哪个 profile / 还是默认链。
+	logger.Info("aws entry credential",
+		"source", service.EntryCredentialSource(config.profile),
+		"region", config.region,
+		"external_id_set", strings.TrimSpace(config.externalID) != "")
 	// 同步顺带采集实例配置文件在用性证据并落库：待清理清单直接读库，
 	// 不必每次打开页面都实时调 EC2/EKS（此前串行 7~25 秒）。
 	usageStore, err := service.NewProfileUsageEvidenceStore(database)

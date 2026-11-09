@@ -4,6 +4,36 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [0.1.3] — 2026-11-09
+
+### Fixed
+
+- The runtime stage no longer downloads anything at build time: the CA bundle
+  is copied out of the `golang:*-alpine` builder image (which already ships
+  `ca-certificates-bundle`), replacing the `apk --no-cache add
+  ca-certificates` step. The `APK_MIRROR` build arg is gone — on networks
+  where both `dl-cdn.alpinelinux.org` and HTTPS alpine mirrors are blocked
+  ("Permission denied" while fetching APKINDEX), the build now completes
+  regardless.
+
+### Added
+
+- AWS credential onboarding guide (`docs/aws-credential-setup.md`): the
+  two-layer identity model (entry identity vs. read-only collector role),
+  credential chains for EC2 instance roles, EKS IRSA and Roles Anywhere, a
+  recommended static-key setup for on-prem deployments, and a two-account
+  cross-account trust walkthrough with copy-paste trust policies.
+- Startup logs now name where the entry AWS credentials came from (env,
+  shared-config profile, instance metadata), without printing secrets, and
+  connectivity errors point at the new guide.
+
+### Changed
+
+- `.env.example` and the README spell out the full first-start must-change
+  list (`POSTGRES_PASSWORD`, `AUTH_MODE`, optional AWS auto-registration and
+  publisher settings); `AUTH_MODE` now defaults to `api-token` instead of
+  the loopback-only `development` mode.
+
 ## [0.1.2] — 2026-11-09
 
 ### Fixed

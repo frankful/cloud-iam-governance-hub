@@ -135,6 +135,12 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("create AWS account connectivity validator: %w", err)
 	}
+	// 同 sync-worker：把入口身份来源打出来，否则「添加账号」失败时只能看到
+	// 一句 AccessDenied，分不清是凭证没找到还是信任策略没配对。
+	logger.Info("aws entry credential",
+		"source", service.EntryCredentialSource(config.awsProfile),
+		"region", config.awsRegion,
+		"external_id_set", config.awsExternalID != "")
 	accountConfigService, err := service.NewAWSAccountConfigService(accountConfigRepository, accountConnectivity, logger)
 	if err != nil {
 		return fmt.Errorf("create AWS account config service: %w", err)

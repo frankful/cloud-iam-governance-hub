@@ -70,3 +70,10 @@ go run ./cmd/platform-token -user-id example-org -name "first admin token" \
 
 - `development`：请求头 `X-User-ID` 伪登录，仅本地开发；
 - `api-token`：Bearer token（登录页粘贴 token）。生产/演示用这个。
+
+## 下一步：接一个真实 AWS 账号
+
+登录进去之后紧接着就是「添加账号」，而这一步失败绝大多数不是平台的问题，是
+入口凭证没配好（找不到凭证、信任策略没包含入口身份、角色没挂
+`IAMReadOnlyAccess`）。四种部署形态分别怎么配、报错怎么读，见
+[aws-credential-setup.md](aws-credential-setup.md)。

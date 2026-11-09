@@ -65,7 +65,8 @@ func NewAWSAccountConnectivityService(
 	}
 	awsConfig, err := config.LoadDefaultConfig(ctx, loadOpts...)
 	if err != nil {
-		return nil, fmt.Errorf("load AWS credentials and configuration: %w", err)
+		return nil, fmt.Errorf("load AWS credentials and configuration: %w (%s)",
+			err, EntryCredentialHint(settings.Profile))
 	}
 	return &AWSAccountConnectivityService{
 		config:     settings,

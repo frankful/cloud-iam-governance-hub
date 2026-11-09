@@ -38,12 +38,26 @@ cd cloud-iam-governance-hub
 cp .env.example .env
 ```
 
-Edit `.env` — the two settings that matter:
+Edit `.env` — the settings that matter on a first start:
 
 ```ini
-AUTH_MODE=api-token              # production mode; `development` is loopback-only
-BOOTSTRAP_AWS_ACCOUNT_ID=123456789012   # optional: auto-register this account on first start
+# REQUIRED: must change. The example file ships a placeholder; anything works,
+# but do not keep it (it also appears in DATABASE_URL above it).
+POSTGRES_PASSWORD=<generate one>
+# REQUIRED: compose publishes the API on 0.0.0.0; development mode turns any
+# X-User-ID header into platform_admin. (.env.example already defaults to this.)
+AUTH_MODE=api-token
+# Optional: auto-register this account on first start (can also be added in UI)
+BOOTSTRAP_AWS_ACCOUNT_ID=123456789012
+# Required before the first PR publish (after approval): the Terraform repo
+# and a token scoped to contents:write + pull_requests:write on it only.
+GITHUB_TOKEN=
+GITHUB_REPOSITORY=owner/repository
 ```
+
+Everything else can stay at its example defaults for a first start: AWS
+credentials follow [docs/aws-credential-setup.md](docs/aws-credential-setup.md),
+and the publisher settings can wait until you actually approve a ticket.
 
 Bring the stack up (Postgres + Redis + API + sync-worker; the API auto-migrates
 and embeds the frontend):
@@ -59,6 +73,12 @@ few minutes on a normal machine, considerably longer on a single core. If
 `REDIS_PORT` / `API_PORT` in `.env` first (any change to `.env` needs
 `docker compose up -d --force-recreate`, not just a restart).
 
+Builds default to `GOPROXY=goproxy.cn` for Go modules. The runtime image needs
+no package downloads at build time — its CA bundle is copied from the builder
+image — so restricted networks that block `dl-cdn.alpinelinux.org` (and HTTPS
+alpine mirrors alike) do not break the build. Behind a corporate proxy, pass
+`--build-arg HTTPS_PROXY=http://proxy:port` for the Go/frontend fetches.
+
 First start with no active admin bootstraps one `admin` login token into
 `data/bootstrap-admin-token.txt` (mode 0600). Paste it into the login page,
 then **revoke it in the UI and delete the file** after you have your own token.
@@ -71,7 +91,10 @@ calls `iam:Get*` / `iam:List*` and nothing else. Trigger the first sync from
 the **Sync** page, then publish the baseline to start managing the account.
 Environment variables are documented in [.env.example](.env.example); the
 first-boot walkthrough is
-[docs/first-use-admin-login.md](docs/first-use-admin-login.md).
+[docs/first-use-admin-login.md](docs/first-use-admin-login.md). Where the
+platform gets its AWS credential — instance role, IRSA, profile, or
+`credential_process` — and how to add accounts without long-lived keys is
+[docs/aws-credential-setup.md](docs/aws-credential-setup.md).
 
 ## Local development (no Docker)
 
@@ -146,6 +169,7 @@ AWS keys; the platform's own identity is read-only.
 
 - [docs/platform-workflow.md](docs/platform-workflow.md) — end-to-end workflow and state machines
 - [docs/first-use-admin-login.md](docs/first-use-admin-login.md) — first-boot admin bootstrap
+- [docs/aws-credential-setup.md](docs/aws-credential-setup.md) — entry vs collector credentials, EC2/EKS vs anywhere, account onboarding, troubleshooting
 - [docs/phase1-design.md](docs/phase1-design.md) — domain model and ticket state machine
 - [docs/phase3-account-baseline-design.md](docs/phase3-account-baseline-design.md) — baseline publication and CI apply
 - [docs/phase4-drift-design.md](docs/phase4-drift-design.md) — drift detection and convergence
