@@ -49,7 +49,15 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X main.version=${VERSION}" -o /
 # Stage 3: runtime
 FROM alpine:3.19
 
-RUN apk --no-cache add ca-certificates
+# APK mirror is overridable: --build-arg APK_MIRROR=default restores the
+# upstream CDN. The default mirrors what GOPROXY already assumes — builds often
+# run on networks where dl-cdn.alpinelinux.org is blocked or unstable, which
+# shows up as "unexpected eof" / "Permission denied" while fetching APKINDEX.
+ARG APK_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/alpine
+RUN if [ "$APK_MIRROR" != "default" ]; then \
+      sed -i "s|https://dl-cdn.alpinelinux.org/alpine|$APK_MIRROR|g" /etc/apk/repositories; \
+    fi \
+ && apk --no-cache add ca-certificates
 
 WORKDIR /app
 

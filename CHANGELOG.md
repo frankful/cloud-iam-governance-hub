@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [0.1.2] — 2026-11-09
+
+### Fixed
+
+- The runtime stage now defaults the alpine package mirror to TUNA
+  (`APK_MIRROR` build arg) instead of `dl-cdn.alpinelinux.org`, which is
+  unreachable on many corporate networks and made
+  `apk --no-cache add ca-certificates` fail with "unexpected eof" /
+  "Permission denied". Pass `--build-arg APK_MIRROR=default` to restore the
+  upstream CDN. Consistent with `GOPROXY` already defaulting to `goproxy.cn`.
+
 ## [0.1.1] — 2026-11-09
 
 ### Documentation
