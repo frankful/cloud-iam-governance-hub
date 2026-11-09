@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [0.1.9] — 2026-11-09
+
+### Changed
+
+- The api and sync-worker containers now run with `network_mode: host`.
+  Verified on an affected host: a `--network host` container reaches STS
+  while a bridge container (even with a lowered MTU) still gets TLS
+  "unexpected eof" — the host's transparent proxy/TUN only captures
+  host-local traffic, so bridge containers bypass it. With host networking
+  the containers inherit the working host path; the api binds
+  `0.0.0.0:${API_PORT}` directly and postgres/redis are reached on
+  `127.0.0.1` (their published ports), so the `ports:` block is gone.
+
 ## [0.1.8] — 2026-11-09
 
 ### Fixed

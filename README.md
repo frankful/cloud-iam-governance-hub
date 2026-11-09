@@ -81,15 +81,14 @@ proxy is slow or unreachable should build with
 proxy, pass `--build-arg HTTPS_PROXY=http://proxy:port` for the Go/frontend
 fetches.
 
-If `curl` works on the host but every HTTPS fetch inside the build fails
-with `EOF` (hosts whose outbound traffic runs through a transparent proxy /
-TUN device that docker bridge containers bypass), the compose build already
-uses `network: host`; for a plain `docker build`, add `--network host`. The
-same applies at **runtime**: containers calling AWS/GitHub get the same
-reset. Set `HTTPS_PROXY` in `.env` to a proxy listening on a non-loopback
-address (e.g. `http://172.17.0.1:7890`, the docker0 gateway to a host-side
-proxy); `NO_PROXY` defaults to keeping loopback and the internal
-`postgres`/`redis` services direct.
+If `curl` works on the host but every HTTPS fetch fails inside docker
+(hosts whose outbound traffic runs through a transparent proxy / TUN device
+that only captures host-local traffic), both layers of this compose file
+already run on the host network stack: build steps use `network: host`, and
+the api / sync-worker containers use `network_mode: host` (reaching
+postgres/redis on `127.0.0.1`). For a plain `docker build`, add
+`--network host`; bridge deployments on normal networks can keep
+`HTTP_PROXY`/`HTTPS_PROXY` in `.env` for outbound AWS/GitHub calls.
 
 On a small build VM (1-2 GB RAM, no swap), the Go build step can be
 OOM-killed and fail with `signal: killed`. The build caps compiler

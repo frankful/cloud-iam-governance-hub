@@ -13,11 +13,13 @@
 # of the poller alone, start an extra container from the same finops image:
 #   docker run -d --name finops-gitstatus-worker --env-file .env \
 #     --entrypoint /app/gitstatus-worker finops
-# Shared env for the business containers: same values, single source.
-# Container-internal addresses point at the sibling service names.
+# Shared env for the business containers. api and sync-worker run with
+# network_mode: host (see the api service below), so the container-internal
+# service names (postgres:, redis:) do not resolve; they reach the published
+# postgres/redis ports on the host loopback address instead.
 x-app-env: &app-env
-  DATABASE_URL: postgres://${POSTGRES_USER:-finops}:${POSTGRES_PASSWORD:-finops-local-only}@postgres:5432/${POSTGRES_DB:-finops}?sslmode=disable
-  REDIS_ADDR: redis:6379
+  DATABASE_URL: postgres://${POSTGRES_USER:-finops}:${POSTGRES_PASSWORD:-finops-local-only}@127.0.0.1:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-finops}?sslmode=disable
+  REDIS_ADDR: 127.0.0.1:${REDIS_PORT:-6379}
   REDIS_PASSWORD: ${REDIS_PASSWORD:-}
   REDIS_DB: ${REDIS_DB:-0}
   PUBLISHER: ${PUBLISHER:-github}
@@ -101,11 +103,20 @@ services:
       # fixes it. Remove this only if the host network must not be shared.
       network: host
     image: finops
+    # The api and sync-worker containers run on the HOST network stack, not
+    # the docker bridge: on hosts with a transparent proxy / TUN device that
+    # only captures host-local traffic, bridge containers' outbound HTTPS
+    # (AWS STS/IAM calls) gets reset while the same request succeeds on the
+    # host. With host networking they inherit the working host path. The
+    # ports block is therefore gone — the api binds 0.0.0.0:${API_PORT}
+    # directly, and postgres/redis keep their own port publishing for the
+    # loopback addresses used in x-app-env above.
+    network_mode: host
     entrypoint: ["/app/finops-api"]
     container_name: finops-api
     environment:
       <<: *app-env
-      API_ADDR: 0.0.0.0:8080
+      API_ADDR: 0.0.0.0:${API_PORT:-8080}
       # Container port publishing requires a non-loopback bind; the loopback
       # guard stays on unless this explicit opt-in is set.
       API_ALLOW_NON_LOOPBACK: "true"
@@ -122,8 +133,6 @@ services:
       BOOTSTRAP_AWS_SYNC_MODE: ${BOOTSTRAP_AWS_SYNC_MODE:-}
       BOOTSTRAP_AWS_ROLE_ARN: ${BOOTSTRAP_AWS_ROLE_ARN:-}
       BOOTSTRAP_AWS_SYNC_ENABLED: ${BOOTSTRAP_AWS_SYNC_ENABLED:-}
-    ports:
-      - "0.0.0.0:${API_PORT:-8080}:8080"
     volumes:
       # Host-mounted workdir: the bootstrap admin token file lands here and
       # survives container recreation / image upgrades.
@@ -159,6 +168,8 @@ services:
     # to pull; the container is created after the build finishes.
     image: finops
     pull_policy: never
+    # Same host-network reasoning as the api service above.
+    network_mode: host
     entrypoint: ["/app/sync-worker"]
     container_name: finops-sync-worker
     # Scale-out note: a fixed container_name blocks `--scale sync-worker=N`.
