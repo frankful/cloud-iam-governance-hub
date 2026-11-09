@@ -73,11 +73,13 @@ few minutes on a normal machine, considerably longer on a single core. If
 `REDIS_PORT` / `API_PORT` in `.env` first (any change to `.env` needs
 `docker compose up -d --force-recreate`, not just a restart).
 
-Builds default to `GOPROXY=goproxy.cn` for Go modules. The runtime image needs
-no package downloads at build time — its CA bundle is copied from the builder
-image — so restricted networks that block `dl-cdn.alpinelinux.org` (and HTTPS
-alpine mirrors alike) do not break the build. Behind a corporate proxy, pass
-`--build-arg HTTPS_PROXY=http://proxy:port` for the Go/frontend fetches.
+Builds use the upstream Go module proxy (`proxy.golang.org`) by default; the
+runtime image needs no package downloads at build time — its CA bundle is
+copied from the builder image. Mainland-China networks where the upstream
+proxy is slow or unreachable should build with
+`--build-arg GOPROXY=https://goproxy.cn,direct`. Behind a corporate HTTP
+proxy, pass `--build-arg HTTPS_PROXY=http://proxy:port` for the Go/frontend
+fetches.
 
 First start with no active admin bootstraps one `admin` login token into
 `data/bootstrap-admin-token.txt` (mode 0600). Paste it into the login page,

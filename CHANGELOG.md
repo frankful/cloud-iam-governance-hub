@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [0.1.4] — 2026-11-09
+
+### Changed
+
+- Go module downloads default to the upstream `proxy.golang.org` instead of
+  `goproxy.cn`, which EOFs on some networks. Mainland-China users can build
+  with `--build-arg GOPROXY=https://goproxy.cn,direct` (documented in the
+  Dockerfile comment and the README).
+
 ## [0.1.3] — 2026-11-09
 
 ### Fixed

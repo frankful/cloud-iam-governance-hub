@@ -24,8 +24,10 @@ RUN npm run build
 # Stage 2: Go build (both binaries; api embeds the freshly built dist)
 FROM golang:1.26-alpine AS go-builder
 
-# Module proxy is overridable: --build-arg GOPROXY=https://proxy.golang.org,direct
-ARG GOPROXY=https://goproxy.cn,direct
+# Module proxy defaults to the upstream proxy.golang.org. Mainland-China
+# networks where that is slow or unreachable can switch to the CN mirror:
+#   docker build --build-arg GOPROXY=https://goproxy.cn,direct -t finops .
+ARG GOPROXY=https://proxy.golang.org,direct
 ENV GOPROXY=${GOPROXY}
 
 WORKDIR /src
