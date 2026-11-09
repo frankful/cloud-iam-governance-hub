@@ -119,6 +119,12 @@ services:
       # Host-mounted workdir: the bootstrap admin token file lands here and
       # survives container recreation / image upgrades.
       - ./data:/app/data
+      # AWS shared-config entry credentials (AWS_PROFILE / static keys stored
+      # in ~/.aws): pass the host's ~/.aws into the container read-only so
+      # the SDK default chain can resolve profiles like iam-readonly. On
+      # hosts without ~/.aws docker just creates an empty directory —
+      # harmless; env-var credentials (AWS_ACCESS_KEY_ID=...) work as before.
+      - ${HOME:-/root}/.aws:/root/.aws:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -154,6 +160,10 @@ services:
       <<: *app-env
       SYNC_WORKER_HEALTH_ADDR: 0.0.0.0:8081
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+    volumes:
+      # Same AWS shared-config mount as the api service: sync jobs assume the
+      # collector roles with the entry credential resolved from ~/.aws.
+      - ${HOME:-/root}/.aws:/root/.aws:ro
     depends_on:
       # The api applies pending migrations on startup and its /healthz only
       # turns green after the schema gate passes, so this orders migration

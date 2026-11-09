@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [0.1.7] — 2026-11-09
+
+### Fixed
+
+- The host's `~/.aws` directory is now mounted read-only into the api and
+  sync-worker containers (`/root/.aws`). The API previously exited at startup
+  when the entry credential came from a shared-config profile (e.g.
+  `AWS_PROFILE=iam-readonly`): the profile existed on the host but was never
+  visible inside the container. Hosts without `~/.aws` are unaffected — env
+  var credentials still work.
+
 ## [0.1.6] — 2026-11-09
 
 ### Fixed

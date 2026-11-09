@@ -34,6 +34,11 @@
 所以**本地不是必须有 aws profile**——但必须存在上面四种来源之一。生产上推荐让
 profile 指向 `credential_process`（第 4 节 B 路），这样配置文件里没有密钥。
 
+> **容器部署注意**：API 和 sync-worker 跑在容器里，`docker-compose.yml` 把宿主机的
+> `~/.aws` **只读挂载**到容器内的 `/root/.aws`。所以 profile 一律定义在**宿主机**上
+> （`/root/.aws/config`、`/root/.aws/credentials`），不要试图在容器里建——容器重建
+> 就没了。如果改用 `AWS_CONFIG_FILE` 指向别处，记得同步调整挂载路径。
+
 启动日志会打印实际使用的来源，`API` 和 `sync-worker` 各一行：
 
 ```
