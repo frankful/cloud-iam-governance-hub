@@ -81,6 +81,11 @@ proxy is slow or unreachable should build with
 proxy, pass `--build-arg HTTPS_PROXY=http://proxy:port` for the Go/frontend
 fetches.
 
+If `curl` works on the host but every HTTPS fetch inside the build fails
+with `EOF` (hosts whose outbound traffic runs through a transparent proxy /
+TUN device that docker bridge containers bypass), the compose build already
+uses `network: host`; for a plain `docker build`, add `--network host`.
+
 First start with no active admin bootstraps one `admin` login token into
 `data/bootstrap-admin-token.txt` (mode 0600). Paste it into the login page,
 then **revoke it in the UI and delete the file** after you have your own token.

@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [0.1.5] — 2026-11-09
+
+### Fixed
+
+- The compose build now runs with `network: host`. On hosts whose outbound
+  traffic goes through a transparent proxy / TUN device, `curl` works on the
+  host but every HTTPS fetch inside bridge-network build containers fails
+  with `EOF`; building on the host network stack fixes it. For a plain
+  `docker build`, pass `--network host`.
+
 ## [0.1.4] — 2026-11-09
 
 ### Changed

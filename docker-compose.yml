@@ -85,6 +85,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Build steps share the host network stack. On hosts whose outbound
+      # traffic goes through a transparent proxy / TUN device (curl works on
+      # the host but every HTTPS fetch inside the build EOFs), bridge-network
+      # build containers bypass that device — building on the host network
+      # fixes it. Remove this only if the host network must not be shared.
+      network: host
     image: finops
     entrypoint: ["/app/finops-api"]
     container_name: finops-api
