@@ -86,6 +86,12 @@ with `EOF` (hosts whose outbound traffic runs through a transparent proxy /
 TUN device that docker bridge containers bypass), the compose build already
 uses `network: host`; for a plain `docker build`, add `--network host`.
 
+On a small build VM (1-2 GB RAM, no swap), the Go build step can be
+OOM-killed and fail with `signal: killed`. The build caps compiler
+parallelism (`GOFLAGS=-p=2`) to survive that; adding swap is the more
+durable fix, and bigger build machines can restore full parallelism with
+`--build-arg GOFLAGS=-p=8`.
+
 First start with no active admin bootstraps one `admin` login token into
 `data/bootstrap-admin-token.txt` (mode 0600). Paste it into the login page,
 then **revoke it in the UI and delete the file** after you have your own token.

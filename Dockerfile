@@ -30,6 +30,14 @@ FROM golang:1.26-alpine AS go-builder
 ARG GOPROXY=https://proxy.golang.org,direct
 ENV GOPROXY=${GOPROXY}
 
+# Cap Go compile parallelism. Small build VMs (1-2 GB RAM, no swap) get the
+# go toolchain OOM-killed — the RUN step dies with "signal: killed" — when
+# it compiles packages at full core count. -p=2 keeps two compiler processes
+# at most. On a bigger build machine pass --build-arg GOFLAGS=-p=8 (or "")
+# to restore full parallelism.
+ARG GOFLAGS=-p=2
+ENV GOFLAGS=${GOFLAGS}
+
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

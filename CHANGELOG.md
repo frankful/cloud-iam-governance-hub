@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [0.1.6] — 2026-11-09
+
+### Fixed
+
+- Go compile parallelism is capped (`GOFLAGS=-p=2`) so small build VMs
+  (1-2 GB RAM, no swap) no longer get the toolchain OOM-killed — the build
+  step previously died with `signal: killed`. Bigger build machines can
+  restore full parallelism with `--build-arg GOFLAGS=-p=8`; adding swap is
+  the more durable fix.
+
 ## [0.1.5] — 2026-11-09
 
 ### Fixed
