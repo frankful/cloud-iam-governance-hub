@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [0.1.1] — 2026-11-09
+
+### Documentation
+
+- `.env.example` and the README now name the AWS managed `IAMReadOnlyAccess`
+  policy (ARN included) for the role the collector assumes, and state that
+  organization mode additionally needs `organizations:ListAccounts` on the
+  entry credential. Both previously said only "a read-only role".
+
 ## [0.1.0] — initial public release
 
 First public snapshot of the platform.

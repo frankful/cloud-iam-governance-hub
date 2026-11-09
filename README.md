@@ -64,10 +64,13 @@ First start with no active admin bootstraps one `admin` login token into
 then **revoke it in the UI and delete the file** after you have your own token.
 
 With `BOOTSTRAP_AWS_ACCOUNT_ID` set, the account registers itself on startup
-(STS connectivity is verified; failure only warns, it does not block). Trigger
-the first sync from the **Sync** page, then publish the baseline to start
-managing the account. Environment variables are documented in
-[.env.example](.env.example); the first-boot walkthrough is
+(STS connectivity is verified; failure only warns, it does not block). The
+role the collector assumes needs only the AWS managed `IAMReadOnlyAccess`
+policy (`arn:aws:iam::aws:policy/IAMReadOnlyAccess`) — the inventory path
+calls `iam:Get*` / `iam:List*` and nothing else. Trigger the first sync from
+the **Sync** page, then publish the baseline to start managing the account.
+Environment variables are documented in [.env.example](.env.example); the
+first-boot walkthrough is
 [docs/first-use-admin-login.md](docs/first-use-admin-login.md).
 
 ## Local development (no Docker)
