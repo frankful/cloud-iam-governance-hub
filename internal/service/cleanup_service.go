@@ -135,6 +135,12 @@ func (service *CleanupService) Build(ctx context.Context, accountRef string) (*C
 	}
 	report.Items = append(report.Items, emptyGroups(groups)...)
 
+	users, err := service.loadUngroupedUsers(ctx, report.AccountDBID)
+	if err != nil {
+		return nil, err
+	}
+	report.Items = append(report.Items, ungroupedUsers(users)...)
+
 	sortCleanupItems(report.Items)
 	for _, item := range report.Items {
 		report.CategoryCounts[item.Category]++
@@ -577,6 +583,15 @@ type groupRow struct {
 	Policies int
 }
 
+// userRow 是判定无组用户所需的事实。Policies 含直挂的托管策略与内联策略
+// （两者都落在 iam_principal_policy 上，policy_type 区分）。
+type userRow struct {
+	Name        string
+	ARN         string
+	Memberships int
+	Policies    int
+}
+
 func (service *CleanupService) loadEmptyGroups(
 	ctx context.Context,
 	accountDBID int64,
@@ -645,6 +660,82 @@ func emptyGroups(groups []groupRow) []CleanupItem {
 			Action:     action,
 			ActionCode: actionCode,
 			Params:     map[string]string{"name": group.Name, "policies": fmt.Sprint(group.Policies)},
+		})
+	}
+	return items
+}
+
+// loadUngroupedUsers 拉取账号下全部用户的组成员数与策略数。成员数在 SQL 里
+// 现算而不是先查组再过滤，用户量大的账号少一次往返。
+func (service *CleanupService) loadUngroupedUsers(
+	ctx context.Context,
+	accountDBID int64,
+) ([]userRow, error) {
+	rows, err := service.db.QueryContext(ctx, `
+		SELECT p.principal_name, p.arn,
+		       (SELECT COUNT(*) FROM iam_group_membership m WHERE m.user_principal_id = p.id),
+		       (SELECT COUNT(*) FROM iam_principal_policy pp WHERE pp.principal_id = p.id)
+		FROM iam_principal p
+		WHERE p.account_id = $1 AND p.principal_type = 'user'
+		ORDER BY p.principal_name`, accountDBID)
+	if err != nil {
+		return nil, fmt.Errorf("load users for cleanup: %w", err)
+	}
+	defer rows.Close()
+	users := make([]userRow, 0, 64)
+	for rows.Next() {
+		var row userRow
+		if err := rows.Scan(&row.Name, &row.ARN, &row.Memberships, &row.Policies); err != nil {
+			return nil, fmt.Errorf("scan cleanup user: %w", err)
+		}
+		users = append(users, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate cleanup users: %w", err)
+	}
+	return users, nil
+}
+
+// ungroupedUsers 找出不属于任何用户组的用户。
+//
+// 与 emptyGroups 同一套设计：完全孤立（无组、无策略）的标可直接删；还挂着
+// 策略的说明用户仍在被授权使用，只是不走组——只能标为待确认。注意登录配置
+// 与访问密钥不在采集范围内，纯孤立用户的删除动作里也要先确认没有活跃密钥。
+func ungroupedUsers(users []userRow) []CleanupItem {
+	items := make([]CleanupItem, 0, 8)
+	for _, user := range users {
+		if user.Memberships > 0 {
+			continue
+		}
+		confidence := CleanupConfidenceReview
+		reasonCode := "user-orphan-policies"
+		reason := "用户不属于任何用户组，但直挂/内联了策略：可能是独立授权账号，删除前需确认"
+		evidence := []CleanupEvidence{{
+			Code:   "user-stats",
+			Text:   fmt.Sprintf("所属组 0；直挂/内联策略 %d 条", user.Policies),
+			Params: map[string]string{"memberships": "0", "policies": fmt.Sprint(user.Policies)},
+		}}
+		actionCode := "delete-user-detach"
+		action := "确认无用后先删除其策略再删除：aws iam delete-user --user-name " + user.Name
+		if user.Policies == 0 {
+			confidence = CleanupConfidenceHigh
+			reasonCode = "user-orphan-plain"
+			reason = "用户不属于任何用户组、也没有直挂/内联任何策略，是孤立用户"
+			actionCode = "delete-user"
+			action = "确认无活跃访问密钥后删除：aws iam delete-user --user-name " + user.Name
+		}
+		items = append(items, CleanupItem{
+			Category:   CleanupCategoryAWSResource,
+			Confidence: confidence,
+			Kind:       BaselineKindUser,
+			Name:       user.Name,
+			ARN:        user.ARN,
+			Reason:     reason,
+			ReasonCode: reasonCode,
+			Evidence:   evidence,
+			Action:     action,
+			ActionCode: actionCode,
+			Params:     map[string]string{"name": user.Name, "policies": fmt.Sprint(user.Policies)},
 		})
 	}
 	return items

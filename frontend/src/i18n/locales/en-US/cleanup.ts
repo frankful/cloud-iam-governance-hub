@@ -62,6 +62,8 @@ export default {
       "profile-eks-ambiguous": "The bound role is still used by a nodegroup, but this profile is referenced by no launch template: the nodegroup may have just been rebuilt and the evidence is not aligned yet",
       "group-empty-plain": "The group has no members and no attached policies — a pure empty shell",
       "group-empty-policies": "The group has no members but still has policies attached: it may be provisioned ahead of use, or simply never cleaned up",
+      "user-orphan-plain": "The user belongs to no group and has no directly attached or inline policies — an orphaned user",
+      "user-orphan-policies": "The user belongs to no group but has policies attached or inlined: it may be an independently authorized account, confirm before deleting",
     },
     action: {
       "delete-file": "Delete the declaration file from the IaC repository and archive the ticket; leave the AWS resource untouched",
@@ -69,6 +71,8 @@ export default {
       "delete-profile-verify": "Confirm which profile is in use via aws eks describe-nodegroup and launch templates first, then delete the rest with aws iam delete-instance-profile",
       "delete-group": "aws iam delete-group --group-name {{name}}",
       "delete-group-detach": "After confirming it is unused, detach the policies first, then: aws iam delete-group --group-name {{name}}",
+      "delete-user": "After confirming there are no active access keys: aws iam delete-user --user-name {{name}}",
+      "delete-user-detach": "After confirming it is unused, delete its policies first, then: aws iam delete-user --user-name {{name}}",
     },
     evidence: {
       "baseline-reason": "{{reason}}",
@@ -86,6 +90,7 @@ export default {
       "role-nodegroups": "The role is still used by nodegroups: {{nodegroups}}",
       "usage-unavailable": "EKS/EC2 evidence unavailable (details in the original text)",
       "group-stats": "{{members}} members; {{policies}} attached policies",
+      "user-stats": "{{memberships}} groups; {{policies}} attached/inline policies",
     },
     error: {
       accounts: "Failed to load AWS accounts",

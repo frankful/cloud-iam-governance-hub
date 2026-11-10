@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [0.1.10] — 2026-11-10
+
+### Added
+
+- The cleanup report now flags users that belong to no IAM group, mirroring
+  the empty-group rule: a pure orphan (no group, no attached/inline
+  policies) is listed as directly actionable (`aws iam delete-user`, with a
+  reminder to check for active access keys first), while a groupless user
+  that still carries policies is listed as review-required. zh-CN / en-US
+  translations included.
+
 ## [0.1.9] — 2026-11-09
 
 ### Changed

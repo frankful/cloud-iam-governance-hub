@@ -277,6 +277,30 @@ func TestEmptyGroups(t *testing.T) {
 	}
 }
 
+func TestUngroupedUsers(t *testing.T) {
+	users := []userRow{
+		{Name: "orphan-plain", Memberships: 0, Policies: 0},
+		{Name: "orphan-with-policy", Memberships: 0, Policies: 1},
+		{Name: "grouped-user", Memberships: 2, Policies: 0},
+	}
+	byName := cleanupByName(t, ungroupedUsers(users))
+	if len(byName) != 2 {
+		t.Fatalf("items = %#v, want 2", byName)
+	}
+	if byName["orphan-plain"].Confidence != CleanupConfidenceHigh {
+		t.Errorf("orphan-plain confidence = %q, want high", byName["orphan-plain"].Confidence)
+	}
+	if byName["orphan-plain"].Kind != BaselineKindUser {
+		t.Errorf("orphan-plain kind = %q, want user", byName["orphan-plain"].Kind)
+	}
+	if byName["orphan-with-policy"].Confidence != CleanupConfidenceReview {
+		t.Errorf("orphan-with-policy confidence = %q, want review", byName["orphan-with-policy"].Confidence)
+	}
+	if _, ok := byName["grouped-user"]; ok {
+		t.Error("有组成员的用户不该进待删清单")
+	}
+}
+
 func TestSortCleanupItems(t *testing.T) {
 	items := []CleanupItem{
 		{Category: CleanupCategoryAWSResource, Confidence: CleanupConfidenceReview, Kind: BaselineKindGroup, Name: "z"},

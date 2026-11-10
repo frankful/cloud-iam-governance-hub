@@ -60,6 +60,8 @@ export default {
       "profile-eks-ambiguous": "绑定角色仍被节点组使用，但本条未被任何 launch template 引用：可能节点组刚重建，证据未对齐",
       "group-empty-plain": "用户组没有任何成员、也没有挂载任何策略，是纯空壳",
       "group-empty-policies": "用户组没有任何成员，但仍挂着策略：可能是预建待用，也可能是无人清理的旧组",
+      "user-orphan-plain": "用户不属于任何用户组、也没有直挂/内联任何策略，是孤立用户",
+      "user-orphan-policies": "用户不属于任何用户组，但直挂/内联了策略：可能是独立授权账号，删除前需确认",
     },
     action: {
       "delete-file": "从 IaC 仓库删除该声明文件并归档工单；AWS 侧资源保持不动",
@@ -67,6 +69,8 @@ export default {
       "delete-profile-verify": "先用 aws eks describe-nodegroup 与 launch template 确认在用项，其余用 aws iam delete-instance-profile 删除",
       "delete-group": "aws iam delete-group --group-name {{name}}",
       "delete-group-detach": "确认无用后先 detach 策略再删除：aws iam delete-group --group-name {{name}}",
+      "delete-user": "确认无活跃访问密钥后删除：aws iam delete-user --user-name {{name}}",
+      "delete-user-detach": "确认无用后先删除其策略再删除：aws iam delete-user --user-name {{name}}",
     },
     evidence: {
       "baseline-reason": "{{reason}}",
@@ -84,6 +88,7 @@ export default {
       "role-nodegroups": "角色仍被节点组使用：{{nodegroups}}",
       "usage-unavailable": "EKS/EC2 侧证据不可用（详情见原文）",
       "group-stats": "成员 {{members}}；挂载策略 {{policies}} 条",
+      "user-stats": "所属组 {{memberships}}；直挂/内联策略 {{policies}} 条",
     },
     error: {
       accounts: "加载 AWS 账号失败",
