@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [0.1.11] — 2026-11-10
+
+### Fixed
+
+- The cleanup report no longer suggests direct `aws iam delete-user` /
+  `delete-group` for resources declared in the baseline: those must be removed
+  via the IaC declaration file (delete file → PR → CI apply), otherwise the
+  next plan recreates them. Undeclared (platform-external) resources keep the
+  direct CLI action.
+
 ## [0.1.10] — 2026-11-10
 
 ### Added

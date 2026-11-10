@@ -262,7 +262,7 @@ func TestEmptyGroups(t *testing.T) {
 		{Name: "empty-with-policy", Members: 0, Policies: 2},
 		{Name: "in-use", Members: 3},
 	}
-	byName := cleanupByName(t, emptyGroups(groups))
+	byName := cleanupByName(t, emptyGroups(groups, nil))
 	if len(byName) != 2 {
 		t.Fatalf("items = %#v, want 2", byName)
 	}
@@ -277,13 +277,57 @@ func TestEmptyGroups(t *testing.T) {
 	}
 }
 
+func TestDeclaredResourcesRouteViaIaC(t *testing.T) {
+	declared := map[string]BaselineResource{
+		BaselineKindGroup + "/empty-shell": {Kind: BaselineKindGroup, Name: "empty-shell", FileKey: "group/empty-shell", Decision: BaselineDecisionCandidate},
+		BaselineKindUser + "/orphan-plain": {Kind: BaselineKindUser, Name: "orphan-plain", FileKey: "user/orphan-plain", Decision: BaselineDecisionCandidate},
+	}
+	groups := []groupRow{
+		{Name: "empty-shell", Members: 0, Policies: 0},
+		{Name: "undeclared-shell", Members: 0, Policies: 0},
+	}
+	byName := cleanupByName(t, emptyGroups(groups, declared))
+	if got := byName["empty-shell"].ActionCode; got != "delete-via-iac-group" {
+		t.Errorf("declared group action = %q, want delete-via-iac-group", got)
+	}
+	if got := byName["empty-shell"].FileKey; got != "group/empty-shell.tf" {
+		t.Errorf("declared group file key = %q, want group/empty-shell.tf", got)
+	}
+	if got := byName["undeclared-shell"].ActionCode; got != "delete-group" {
+		t.Errorf("undeclared group action = %q, want delete-group", got)
+	}
+	if len(byName["empty-shell"].Evidence) == 0 {
+		t.Fatal("declared group should carry a declared-in-baseline evidence line")
+	}
+	last := byName["empty-shell"].Evidence[len(byName["empty-shell"].Evidence)-1]
+	if last.Code != "declared-in-baseline" {
+		t.Errorf("last evidence = %q, want declared-in-baseline", last.Code)
+	}
+
+	users := []userRow{{Name: "orphan-plain", Memberships: 0, Policies: 0}}
+	userItems := cleanupByName(t, ungroupedUsers(users, declared))
+	if got := userItems["orphan-plain"].ActionCode; got != "delete-via-iac-user" {
+		t.Errorf("declared user action = %q, want delete-via-iac-user", got)
+	}
+	if got := userItems["orphan-plain"].FileKey; got != "user/orphan-plain.tf" {
+		t.Errorf("declared user file key = %q, want user/orphan-plain.tf", got)
+	}
+
+	// case-insensitive name matching between inventory and baseline
+	usersLower := []userRow{{Name: "Orphan-Plain", Memberships: 0, Policies: 0}}
+	mixed := cleanupByName(t, ungroupedUsers(usersLower, declared))
+	if got := mixed["Orphan-Plain"].ActionCode; got != "delete-via-iac-user" {
+		t.Errorf("case-mismatch declared user action = %q, want delete-via-iac-user", got)
+	}
+}
+
 func TestUngroupedUsers(t *testing.T) {
 	users := []userRow{
 		{Name: "orphan-plain", Memberships: 0, Policies: 0},
 		{Name: "orphan-with-policy", Memberships: 0, Policies: 1},
 		{Name: "grouped-user", Memberships: 2, Policies: 0},
 	}
-	byName := cleanupByName(t, ungroupedUsers(users))
+	byName := cleanupByName(t, ungroupedUsers(users, nil))
 	if len(byName) != 2 {
 		t.Fatalf("items = %#v, want 2", byName)
 	}

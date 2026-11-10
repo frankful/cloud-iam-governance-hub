@@ -73,6 +73,8 @@ export default {
       "delete-group-detach": "After confirming it is unused, detach the policies first, then: aws iam delete-group --group-name {{name}}",
       "delete-user": "After confirming there are no active access keys: aws iam delete-user --user-name {{name}}",
       "delete-user-detach": "After confirming it is unused, delete its policies first, then: aws iam delete-user --user-name {{name}}",
+      "delete-via-iac-user": "Delete the declaration file {{file}} and merge the PR; CI apply then removes it from AWS and the state. Do NOT run aws iam delete-user --user-name {{name}} directly",
+      "delete-via-iac-group": "Delete the declaration file {{file}} and merge the PR; CI apply then removes it from AWS and the state. Do NOT run aws iam delete-group --group-name {{name}} directly",
     },
     evidence: {
       "baseline-reason": "{{reason}}",
@@ -91,6 +93,7 @@ export default {
       "usage-unavailable": "EKS/EC2 evidence unavailable (details in the original text)",
       "group-stats": "{{members}} members; {{policies}} attached policies",
       "user-stats": "{{memberships}} groups; {{policies}} attached/inline policies",
+      "declared-in-baseline": "Declared in the baseline: file {{file}}; deleting it in AWS directly would drift the declaration from reality (recreated on the next plan)",
     },
     error: {
       accounts: "Failed to load AWS accounts",

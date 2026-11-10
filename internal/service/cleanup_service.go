@@ -133,13 +133,13 @@ func (service *CleanupService) Build(ctx context.Context, accountRef string) (*C
 	if err != nil {
 		return nil, err
 	}
-	report.Items = append(report.Items, emptyGroups(groups)...)
+	report.Items = append(report.Items, emptyGroups(groups, declaredResources(candidates.Resources))...)
 
 	users, err := service.loadUngroupedUsers(ctx, report.AccountDBID)
 	if err != nil {
 		return nil, err
 	}
-	report.Items = append(report.Items, ungroupedUsers(users)...)
+	report.Items = append(report.Items, ungroupedUsers(users, declaredResources(candidates.Resources))...)
 
 	sortCleanupItems(report.Items)
 	for _, item := range report.Items {
@@ -308,6 +308,41 @@ func declaredLifecycleFiles(
 		})
 	}
 	return items
+}
+
+// declaredResources 收集平台已进基线（decision=candidate）的资源，键为
+// kind/name。进了基线的资源在 IaC 仓库里有声明文件、在 Terraform state 里有
+// 记录：直接对 AWS 动手（delete-user / delete-group）会让声明与实态漂移——
+// 下次 CI plan 会试图重建。这类资源的清理必须走删声明文件 → PR → CI apply。
+func declaredResources(resources []BaselineResource) map[string]BaselineResource {
+	index := make(map[string]BaselineResource, len(resources))
+	for _, resource := range resources {
+		if resource.Decision != BaselineDecisionCandidate || resource.FileKey == "" {
+			continue
+		}
+		index[resource.Kind+"/"+strings.ToLower(strings.TrimSpace(resource.Name))] = resource
+	}
+	return index
+}
+
+// routeViaIaC 把一条「直接删 AWS」的清理项改写为 IaC 路径：动作指向删声明
+// 文件并由 CI apply 收尾，证据里点名声明文件与漂移风险。未进基线的资源不经过
+// 这里，保留原样（平台外创建的，AWS CLI 直删不会引起漂移）。
+func routeViaIaC(item CleanupItem, declared map[string]BaselineResource, kind, name, directCmd string) CleanupItem {
+	resource, ok := declared[kind+"/"+strings.ToLower(strings.TrimSpace(name))]
+	if !ok {
+		return item
+	}
+	fileKey := resource.FileKey + ".tf"
+	item.ActionCode = "delete-via-iac-" + kind // 前端按 cleanup.action.<code> 扁平解析，user/group 文案不同
+	item.Action = "删除声明文件 " + fileKey + " 并合并 PR，由 CI apply 从 AWS 与 state 一并删除；不要直接 " + directCmd
+	item.Evidence = append(item.Evidence, CleanupEvidence{
+		Code: "declared-in-baseline",
+		Text: "已进基线：声明文件 " + fileKey + "；直接在 AWS 删除会造成声明与实态漂移（下次 plan 重建）",
+		Params: map[string]string{"file": fileKey},
+	})
+	item.FileKey = fileKey
+	return item
 }
 
 // instanceProfileRow 是判定实例配置文件所需的最小事实集。
@@ -625,7 +660,7 @@ func (service *CleanupService) loadEmptyGroups(
 //
 // 完全没有成员、也没有挂策略的组是纯空壳，直接可删；还挂着策略的组有第二种
 // 可能——预建但尚未投放使用，所以只能标为待确认。
-func emptyGroups(groups []groupRow) []CleanupItem {
+func emptyGroups(groups []groupRow, declared map[string]BaselineResource) []CleanupItem {
 	items := make([]CleanupItem, 0, 8)
 	for _, group := range groups {
 		if group.Members > 0 {
@@ -648,7 +683,7 @@ func emptyGroups(groups []groupRow) []CleanupItem {
 			actionCode = "delete-group"
 			action = "aws iam delete-group --group-name " + group.Name
 		}
-		items = append(items, CleanupItem{
+		items = append(items, routeViaIaC(CleanupItem{
 			Category:   CleanupCategoryAWSResource,
 			Confidence: confidence,
 			Kind:       BaselineKindGroup,
@@ -660,7 +695,7 @@ func emptyGroups(groups []groupRow) []CleanupItem {
 			Action:     action,
 			ActionCode: actionCode,
 			Params:     map[string]string{"name": group.Name, "policies": fmt.Sprint(group.Policies)},
-		})
+		}, declared, BaselineKindGroup, group.Name, "aws iam delete-group --group-name "+group.Name))
 	}
 	return items
 }
@@ -701,7 +736,7 @@ func (service *CleanupService) loadUngroupedUsers(
 // 与 emptyGroups 同一套设计：完全孤立（无组、无策略）的标可直接删；还挂着
 // 策略的说明用户仍在被授权使用，只是不走组——只能标为待确认。注意登录配置
 // 与访问密钥不在采集范围内，纯孤立用户的删除动作里也要先确认没有活跃密钥。
-func ungroupedUsers(users []userRow) []CleanupItem {
+func ungroupedUsers(users []userRow, declared map[string]BaselineResource) []CleanupItem {
 	items := make([]CleanupItem, 0, 8)
 	for _, user := range users {
 		if user.Memberships > 0 {
@@ -724,7 +759,7 @@ func ungroupedUsers(users []userRow) []CleanupItem {
 			actionCode = "delete-user"
 			action = "确认无活跃访问密钥后删除：aws iam delete-user --user-name " + user.Name
 		}
-		items = append(items, CleanupItem{
+		items = append(items, routeViaIaC(CleanupItem{
 			Category:   CleanupCategoryAWSResource,
 			Confidence: confidence,
 			Kind:       BaselineKindUser,
@@ -736,7 +771,7 @@ func ungroupedUsers(users []userRow) []CleanupItem {
 			Action:     action,
 			ActionCode: actionCode,
 			Params:     map[string]string{"name": user.Name, "policies": fmt.Sprint(user.Policies)},
-		})
+		}, declared, BaselineKindUser, user.Name, "aws iam delete-user --user-name "+user.Name))
 	}
 	return items
 }

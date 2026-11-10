@@ -71,6 +71,8 @@ export default {
       "delete-group-detach": "确认无用后先 detach 策略再删除：aws iam delete-group --group-name {{name}}",
       "delete-user": "确认无活跃访问密钥后删除：aws iam delete-user --user-name {{name}}",
       "delete-user-detach": "确认无用后先删除其策略再删除：aws iam delete-user --user-name {{name}}",
+      "delete-via-iac-user": "删除声明文件 {{file}} 并合并 PR，由 CI apply 从 AWS 与 state 一并删除；不要直接 aws iam delete-user --user-name {{name}}",
+      "delete-via-iac-group": "删除声明文件 {{file}} 并合并 PR，由 CI apply 从 AWS 与 state 一并删除；不要直接 aws iam delete-group --group-name {{name}}",
     },
     evidence: {
       "baseline-reason": "{{reason}}",
@@ -89,6 +91,7 @@ export default {
       "usage-unavailable": "EKS/EC2 侧证据不可用（详情见原文）",
       "group-stats": "成员 {{members}}；挂载策略 {{policies}} 条",
       "user-stats": "所属组 {{memberships}}；直挂/内联策略 {{policies}} 条",
+      "declared-in-baseline": "已进基线：声明文件 {{file}}；直接在 AWS 删除会造成声明与实态漂移（下次 plan 重建）",
     },
     error: {
       accounts: "加载 AWS 账号失败",
