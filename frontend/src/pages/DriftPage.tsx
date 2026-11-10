@@ -274,6 +274,7 @@ export default function DriftPage() {
     {
       title: t("drift.column.resource"),
       dataIndex: "resource_key",
+      width: 200,
       render: (value: string | undefined, record: DriftFinding) => (
         <Space direction="vertical" size={0}>
           <Text strong>{value || record.kind || "—"}</Text>
@@ -304,6 +305,7 @@ export default function DriftPage() {
     {
       title: t("drift.column.summary"),
       dataIndex: "summary",
+      width: 280,
       render: (value: string | undefined, record: DriftFinding) => (
         <Text>{driftSummaryText(record, t) || value || "—"}</Text>
       ),
@@ -555,6 +557,9 @@ export default function DriftPage() {
         loading={loading}
         columns={columns}
         dataSource={page.items}
+        // 固定列宽合计 1700：窄窗口下出横向滚动条，而不是把资源/说明两列
+        // 压成一字一行竖排（台账截图复现过的布局事故）。
+        scroll={{ x: 1700 }}
         locale={{ emptyText: <Empty description={t("drift.empty")} /> }}
         expandable={{
           rowExpandable: (record) => record.fields.length > 0,
