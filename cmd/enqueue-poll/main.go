@@ -23,7 +23,7 @@ type pollTask struct {
 }
 
 func main() {
-	ticketNo := "IAM-50F85598D87D0178"
+	ticketNo := "IAM-0123456789ABCDEF"
 	project := "example-org/iam-baseline"
 	prNumber := "1"
 	delay := 0 * time.Second

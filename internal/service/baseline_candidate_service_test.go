@@ -491,7 +491,7 @@ func TestClassifyInlinePolicyFollowsOwner(t *testing.T) {
 // TestInlinePolicyAddressMatchesGeneratorLabel 保证候选集预测的地址与
 // 生成器渲染的地址来自同一个函数——双声明类 bug 只能在这里拦住。
 func TestInlinePolicyAddressMatchesGeneratorLabel(t *testing.T) {
-	owner, policy := "Agentic-Commerce", "Describe-EC2"
+	owner, policy := "Example-Corp", "Describe-EC2"
 	item := BaselineResource{
 		Kind:      BaselineKindInlinePolicy,
 		Name:      policy,

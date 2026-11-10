@@ -87,7 +87,7 @@ func main() {
 	}
 
 	// 目标工单/PR 由环境变量指定，缺省保留历史上的调试目标。
-	ticketNo := envOr("DIAG_TICKET_NO", "IAM-50F85598D87D0178")
+	ticketNo := envOr("DIAG_TICKET_NO", "IAM-0123456789ABCDEF")
 	prNumber := envOr("DIAG_PR_NUMBER", "1")
 	attempt := 1
 	if raw := envOr("DIAG_ATTEMPT", ""); raw != "" {

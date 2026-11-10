@@ -4164,11 +4164,11 @@ func TestAttachPolicyDefaultsToUserAndRejectsUnknownPrincipal(t *testing.T) {
 func TestRoleAttachPolicyAdoptsWildAttachment(t *testing.T) {
 	repository := newMemoryTicketRepository()
 	repository.principalExists = true
-	arn := "arn:aws:iam::111122223333:policy/agentic-commerce-prod-AWSLoadBalancerControllerIAMPolicy"
-	repository.attachments["Role/agentic-commerce-prod-kms-irsa-role/"+arn] = "" // 野生挂载
+	arn := "arn:aws:iam::111122223333:policy/example-app-prod-AWSLoadBalancerControllerIAMPolicy"
+	repository.attachments["Role/example-app-prod-kms-irsa-role/"+arn] = "" // 野生挂载
 	service := newTestTicketService(t, repository, &memoryTicketPublisher{url: "https://github.example/iac/pull/40"})
 
-	request := attachPolicyTicketRequest("Role", "agentic-commerce-prod-kms-irsa-role")
+	request := attachPolicyTicketRequest("Role", "example-app-prod-kms-irsa-role")
 	request.ManagedPolicyARN = arn
 	ticket, err := service.CreateTicket(context.Background(), "requester", request)
 	if err != nil {
@@ -4178,7 +4178,7 @@ func TestRoleAttachPolicyAdoptsWildAttachment(t *testing.T) {
 	preview := repository.validationChecks[*ticket.TicketNo].TerraformPreview
 	for _, want := range []string{
 		"import {",
-		`id = "agentic-commerce-prod-kms-irsa-role/` + arn + `"`,
+		`id = "example-app-prod-kms-irsa-role/` + arn + `"`,
 		`resource "aws_iam_role_policy_attachment"`,
 	} {
 		if !strings.Contains(preview, want) {
@@ -4194,7 +4194,7 @@ func TestRoleAttachPolicyAdoptsWildAttachment(t *testing.T) {
 	}
 	if ticket.TerraformCode == nil ||
 		!strings.Contains(*ticket.TerraformCode, `resource "aws_iam_role_policy_attachment"`) ||
-		!strings.Contains(*ticket.TerraformCode, `agentic-commerce-prod-kms-irsa-role/`+arn) {
+		!strings.Contains(*ticket.TerraformCode, `example-app-prod-kms-irsa-role/`+arn) {
 		t.Fatalf("published role attach Terraform unexpected:\n%v", ticket.TerraformCode)
 	}
 }
@@ -4715,18 +4715,18 @@ func TestUpdateManagedPolicyValidationRejects(t *testing.T) {
 func TestCreateUpdateGroupInlinePolicyTicketPublishesTerraform(t *testing.T) {
 	repository := newMemoryTicketRepository()
 	repository.principalExists = true
-	repository.policyRecords["group/tdfos-prod-group/InlineRead"] = json.RawMessage(
+	repository.policyRecords["group/example-app-prod-group/InlineRead"] = json.RawMessage(
 		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}]}`)
 	service := newTestTicketService(t, repository, &memoryTicketPublisher{url: "https://github.example/iac/pull/32"})
 
-	request := updateGroupInlinePolicyTicketRequest("tdfos-prod-group", "InlineRead",
+	request := updateGroupInlinePolicyTicketRequest("example-app-prod-group", "InlineRead",
 		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:PutObject","Resource":"*"}]}`)
 	ticket, err := service.CreateTicket(context.Background(), "requester", request)
 	if err != nil {
 		t.Fatalf("CreateTicket(UPDATE_GROUP_INLINE_POLICY) error = %v", err)
 	}
 	// principal_name derived from the group; principal_type forced to Group.
-	if ticket.PrincipalName == nil || *ticket.PrincipalName != "tdfos-prod-group" {
+	if ticket.PrincipalName == nil || *ticket.PrincipalName != "example-app-prod-group" {
 		t.Fatalf("principal_name = %v, want group name", ticket.PrincipalName)
 	}
 
@@ -4744,17 +4744,17 @@ func TestCreateUpdateGroupInlinePolicyTicketPublishesTerraform(t *testing.T) {
 	// First update of this inline policy → import block with <group>:<name>
 	// (aws_iam_group_policy 的 import ID 用冒号，attachment 类才用斜杠)。
 	if !strings.Contains(*ticket.TerraformCode, "import {") ||
-		!strings.Contains(*ticket.TerraformCode, "tdfos-prod-group:InlineRead") {
+		!strings.Contains(*ticket.TerraformCode, "example-app-prod-group:InlineRead") {
 		t.Fatalf("first-time inline update should carry an import block:\n%s", *ticket.TerraformCode)
 	}
 	// 标签为 group_<group>_<rand5>_<policy>（随机后缀，断言前缀+后缀）。
-	if !strings.Contains(*ticket.TerraformCode, `resource "aws_iam_group_policy" "group_tdfos-prod-group_`) ||
+	if !strings.Contains(*ticket.TerraformCode, `resource "aws_iam_group_policy" "group_example-app-prod-group_`) ||
 		!strings.Contains(*ticket.TerraformCode, `_InlineRead" {`) {
 		t.Fatalf("published Terraform missing aws_iam_group_policy resource:\n%s", *ticket.TerraformCode)
 	}
 	// 资源标签随工单请求持久化（resource_name），保证预览与发布一致。
 	stored, ok := repository.tickets[*ticket.TicketNo]
-	if !ok || !strings.Contains(string(stored.RequestPolicy), `"resource_name":"group_tdfos-prod-group_`) {
+	if !ok || !strings.Contains(string(stored.RequestPolicy), `"resource_name":"group_example-app-prod-group_`) {
 		t.Fatalf("resource_name not stored on ticket request: %s", stored.RequestPolicy)
 	}
 }
@@ -4766,7 +4766,7 @@ func TestUpdateGroupInlinePolicyValidationRejects(t *testing.T) {
 
 	// Inline policy not present on the group → 不再硬拦（GitOps 自愈：Terraform
 	// 侧按声明重建），校验结果给出 INLINE_POLICY_ABSENT 提示。
-	request := updateGroupInlinePolicyTicketRequest("tdfos-prod-group", "Ghost",
+	request := updateGroupInlinePolicyTicketRequest("example-app-prod-group", "Ghost",
 		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject"],"Resource":["*"]}]}`)
 	snapshot, err := service.PreviewValidation(context.Background(), "requester", request)
 	if err != nil {
@@ -4777,7 +4777,7 @@ func TestUpdateGroupInlinePolicyValidationRejects(t *testing.T) {
 	}
 
 	// User inline policies are not supported: only Group and Role principals.
-	request = updateGroupInlinePolicyTicketRequest("tdfos-prod-group", "InlineRead",
+	request = updateGroupInlinePolicyTicketRequest("example-app-prod-group", "InlineRead",
 		`{"Version":"2012-10-17","Statement":[]}`)
 	request.PrincipalType = "User"
 	if _, err := service.CreateTicket(context.Background(), "requester", request); err == nil ||
@@ -5117,12 +5117,12 @@ func TestPolicyFileTicketNoIsDeterministic(t *testing.T) {
 	inline := CreateIAMTicketRequest{
 		TicketType: TicketTypeUpdateGroupInlinePolicy,
 		UpdatePolicy: &adapter.UpdatePolicyConfig{
-			GroupName:        "tdfos-prod-group",
+			GroupName:        "example-app-prod-group",
 			InlinePolicyName: "InlineRead",
 			Document:         json.RawMessage(`{}`),
 		},
 	}
-	if key := inline.terraformFileTicketNo("IAM-FALLBACK"); key != "group-tdfos-prod-group-policy-inlineread" {
+	if key := inline.terraformFileTicketNo("IAM-FALLBACK"); key != "group-example-app-prod-group-policy-inlineread" {
 		t.Fatalf("inline policy file key = %q", key)
 	}
 

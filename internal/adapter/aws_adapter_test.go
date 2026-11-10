@@ -373,20 +373,20 @@ func TestGenerateAttachGroupPolicyTerraform(t *testing.T) {
 // 野生挂载 import id 为 <role>/<policyARN>（provider 文档格式）。
 func TestGenerateAttachRolePolicyTerraform(t *testing.T) {
 	adapter := AWSAdapter{}
-	arn := "arn:aws:iam::111122223333:policy/agentic-commerce-prod-AWSLoadBalancerControllerIAMPolicy"
+	arn := "arn:aws:iam::111122223333:policy/example-app-prod-AWSLoadBalancerControllerIAMPolicy"
 
 	t.Run("role attachment with wild-adoption import", func(t *testing.T) {
 		hcl, err := adapter.GenerateAttachPolicyTerraform(
-			"Role", "agentic-commerce-prod-kms-irsa-role", arn, "agentic-commerce-prod-kms-irsa-role/"+arn, "")
+			"Role", "example-app-prod-kms-irsa-role", arn, "example-app-prod-kms-irsa-role/"+arn, "")
 		if err != nil {
 			t.Fatalf("GenerateAttachPolicyTerraform(Role) error = %v", err)
 		}
 		for _, want := range []string{
-			`resource "aws_iam_role_policy_attachment" "attachment_role_agentic-commerce-prod-kms-irsa-role_agentic-commerce-prod-AWSLoadBalancerControllerIAMPolicy"`,
-			`role       = "agentic-commerce-prod-kms-irsa-role"`,
+			`resource "aws_iam_role_policy_attachment" "attachment_role_example-app-prod-kms-irsa-role_example-app-prod-AWSLoadBalancerControllerIAMPolicy"`,
+			`role       = "example-app-prod-kms-irsa-role"`,
 			`policy_arn = "` + arn + `"`,
 			"import {",
-			`id = "agentic-commerce-prod-kms-irsa-role/` + arn + `"`,
+			`id = "example-app-prod-kms-irsa-role/` + arn + `"`,
 			"to = aws_iam_role_policy_attachment.",
 		} {
 			if !strings.Contains(hcl, want) {
@@ -1591,12 +1591,12 @@ func TestPatchRoleAttributesStripsConsumedImport(t *testing.T) {
 	const file = `# First-time adoption: import the pre-existing role into
 # Terraform state, then declare it (Terraform >= 1.5).
 import {
-	id = "infra-eks1-nodegroup-role-6e24d61"
-	to = aws_iam_role.role_infra-eks1-nodegroup-role-6e24d61
+	id = "example-eks-nodegroup-role-6e24d61"
+	to = aws_iam_role.role_example-eks-nodegroup-role-6e24d61
 }
 
-resource "aws_iam_role" "role_infra-eks1-nodegroup-role-6e24d61" {
-	name                 = "infra-eks1-nodegroup-role-6e24d61"
+resource "aws_iam_role" "role_example-eks-nodegroup-role-6e24d61" {
+	name                 = "example-eks-nodegroup-role-6e24d61"
 	assume_role_policy   = jsonencode({"Version" = "2012-10-17"})
 	path                 = "/"
 	max_session_duration = 3600
@@ -1604,7 +1604,7 @@ resource "aws_iam_role" "role_infra-eks1-nodegroup-role-6e24d61" {
 `
 	out, err := adapter.PatchRoleAttributes(file, &RoleAttrPatch{
 		MaxSessionDuration: func() *int { v := 7200; return &v }(),
-	}, "infra-eks1-nodegroup-role-6e24d61")
+	}, "example-eks-nodegroup-role-6e24d61")
 	if err != nil {
 		t.Fatalf("PatchRoleAttributes() error = %v", err)
 	}
@@ -1617,7 +1617,7 @@ resource "aws_iam_role" "role_infra-eks1-nodegroup-role-6e24d61" {
 	if !strings.Contains(out, "max_session_duration = 7200") {
 		t.Errorf("patched attribute missing:\n%s", out)
 	}
-	if !strings.Contains(out, `resource "aws_iam_role" "role_infra-eks1-nodegroup-role-6e24d61"`) {
+	if !strings.Contains(out, `resource "aws_iam_role" "role_example-eks-nodegroup-role-6e24d61"`) {
 		t.Errorf("resource label must be preserved:\n%s", out)
 	}
 }

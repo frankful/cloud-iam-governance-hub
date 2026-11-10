@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
+## [Unreleased]
+
+### Added
+
+- Minimal CI workflow (go build/test, frontend tsc + build, gitleaks secret
+  scan) so external PRs get a gate and fixture regressions cannot silently
+  re-enter the tree.
+
+### Fixed
+
+- The drift table squeezed the resource/summary columns into one-character
+  vertical text on narrow windows; the table now scrolls horizontally instead
+  (the only page missing a `scroll.x`, now aligned with the other pages).
+
+### Changed
+
+- Test fixtures no longer use real production resource naming
+  (`agentic-commerce-prod-*`, `tdfos-prod-group`, `infra-eks1-nodegroup-role`,
+  `Agentic-Commerce`, real ticket numbers); placeholders instead. The publish
+  scanner now rejects these patterns.
+
 ## [0.1.11] — 2026-11-10
 
 ### Fixed

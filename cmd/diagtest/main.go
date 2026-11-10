@@ -34,7 +34,7 @@ func parseEnv(path string) map[string]string {
 func main() {
 	env := parseEnv(".env")
 	dbURL := env["DATABASE_URL"]
-	ticketNo := "IAM-50F85598D87D0178"
+	ticketNo := "IAM-0123456789ABCDEF"
 	if len(os.Args) > 1 {
 		ticketNo = os.Args[1]
 	}

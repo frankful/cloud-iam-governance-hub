@@ -121,7 +121,7 @@ func TestUnboundInstanceProfiles(t *testing.T) {
 
 // 解析器缺失（nil）时维持旧行为：重复的 eks-<uuid> 全部标为需确认。
 func TestEKSCleanupWithoutResolver(t *testing.T) {
-	roleARN := "arn:aws:iam::1:role/infra-eks1-nodegroup-role"
+	roleARN := "arn:aws:iam::1:role/example-eks-nodegroup-role"
 	profiles := []instanceProfileRow{
 		{Name: "eks-11111111-1111-1111-1111-111111111111", RoleARN: roleARN, RoleName: "infra"},
 		{Name: "eks-22222222-2222-2222-2222-222222222222", RoleARN: roleARN, RoleName: "infra"},
@@ -146,7 +146,7 @@ func TestEKSCleanupWithoutResolver(t *testing.T) {
 
 // 解析成功：被 launch template 引用的在用项不再上榜，其余孤儿升级为 high。
 func TestEKSCleanupWithUsage(t *testing.T) {
-	roleARN := "arn:aws:iam::1:role/infra-eks1-nodegroup-role"
+	roleARN := "arn:aws:iam::1:role/example-eks-nodegroup-role"
 	usedProfile := instanceProfileRow{
 		Name: "eks-11111111-1111-1111-1111-111111111111",
 		ARN:  "arn:aws:iam::1:instance-profile/eks-11111111-1111-1111-1111-111111111111",
