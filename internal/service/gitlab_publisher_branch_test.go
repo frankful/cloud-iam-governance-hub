@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/xanzy/go-gitlab"
+
+	"github.com/frankful/cloud-iam-governance-hub/internal/model"
 )
 
 // gitlabTestServer 模拟 PublishBranch / TerraformFileMeta / DeleteBranch 用到的
@@ -70,10 +73,14 @@ func (state *gitlabTestServer) register() {
 				http.NotFound(writer, request)
 				return
 			}
+			// 真实 GitLab 的 contents API 恒返回 base64 编码内容（encoding=base64）。
+			encode := func(raw string) string {
+				return base64.StdEncoding.EncodeToString([]byte(raw))
+			}
 			if state.branchFiles["role-demo.tf"] != "" {
 				_ = json.NewEncoder(writer).Encode(gitlab.File{
 					FilePath: "iam/account-123/role-demo.tf",
-					Content:  state.branchFiles["role-demo.tf"], BlobID: "srcblob",
+					Content:  encode(state.branchFiles["role-demo.tf"]), Encoding: "base64", BlobID: "srcblob",
 				})
 				return
 			}
@@ -83,7 +90,7 @@ func (state *gitlabTestServer) register() {
 			}
 			_ = json.NewEncoder(writer).Encode(gitlab.File{
 				FilePath: "iam/account-123/role-demo.tf",
-				Content:  *state.fileOnMain, BlobID: state.fileBlobs["role-demo.tf"],
+				Content:  encode(*state.fileOnMain), Encoding: "base64", BlobID: state.fileBlobs["role-demo.tf"],
 			})
 		case strings.Contains(path, "/repository/tree") && request.Method == http.MethodGet:
 			if state.treeStatus != 0 {
@@ -170,6 +177,29 @@ func newGitLabTestPublisher(baseURL string) *GitLabSDKPublisher {
 		panic(err)
 	}
 	return publisher
+}
+
+// TestGitLabFetchTerraformFileDecodesBase64 回归：真实 GitLab contents API
+// 恒返回 base64 内容，FetchTerraformFile 必须解码后再交给 HCL 扫描/补丁，
+// 否则成员变更工单在预览/校验/提交时报
+// "parse Terraform file: membership.tf:1,<N>-<N>: Missing expression"。
+func TestGitLabFetchTerraformFileDecodesBase64(t *testing.T) {
+	state := newGitLabTestServer(t)
+	content := "resource \"aws_iam_group_membership\" \"group_demo_membership\" {\n\tusers = [\"frank\"]\n}\n"
+	state.fileOnMain = &content
+	publisher := newGitLabTestPublisher(state.server.URL)
+
+	accountID := int64(1)
+	got, err := publisher.FetchTerraformFile(context.Background(),
+		model.IAMTicket{AccountID: &accountID},
+		CreateIAMTicketRequest{AWSAccountID: "123", TicketType: TicketTypeUpdateRole, PrincipalName: "demo"},
+	)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if !strings.Contains(got, "resource \"aws_iam_group_membership\"") || !strings.Contains(got, "\n") {
+		t.Fatalf("fetched content is not decoded HCL: %q", got)
+	}
 }
 
 func TestGitLabTerraformFileMeta(t *testing.T) {

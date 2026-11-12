@@ -17,6 +17,11 @@ semantic versioning.
 - The drift table squeezed the resource/summary columns into one-character
   vertical text on narrow windows; the table now scrolls horizontally instead
   (the only page missing a `scroll.x`, now aligned with the other pages).
+- The GitLab publisher returned repository file content verbatim, but the
+  GitLab files API always encodes it as base64; HCL scanning/patching parsed
+  the encoded blob and failed with errors like
+  `membership.tf:1,453-453: Missing expression`. Content is now decoded
+  before use, matching the GitHub publisher.
 
 ### Changed
 

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -7697,10 +7698,22 @@ func (publisher *GitLabSDKPublisher) FetchTerraformFile(
 		}
 		return "", fmt.Errorf("fetch Terraform file %s: %w", fileName, err)
 	}
+	// GitLab contents API 的 content 恒为 base64（encoding=base64），与
+	// GitHub 侧（github_publisher.go）保持一致：先解码再返回，否则 HCL
+	// 扫描/补丁会把单行 base64 blob 当 Terraform 源码解析——base64 尾部
+	// 的 "=" 会被当成无值的属性赋值，报 "Missing expression; Expected
+	// the start of an expression, but found the end of the file"。
 	content := file.Content
 	if strings.TrimSpace(content) == "" {
 		return "", fmt.Errorf("Terraform file %s is empty on branch %s", fileName, publisher.config.TargetBranch)
 	}
+	decoded, decodeErr := base64.StdEncoding.DecodeString(
+		strings.Join(strings.Fields(content), ""))
+	if decodeErr != nil {
+		return "", fmt.Errorf("decode Terraform file %s (GitLab contents API returns base64): %w",
+			fileName, decodeErr)
+	}
+	content = string(decoded)
 	return content, nil
 }
 
