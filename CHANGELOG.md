@@ -14,6 +14,11 @@ semantic versioning.
 
 ### Fixed
 
+- The inline-policy change form prefilled its editor from the managed-policy
+  endpoint, which never contains inline policies; the fetch failed silently
+  and the editor opened empty even though the inventory listed the policy. It
+  now uses the inline-policy endpoint, so selecting an inline policy prefills
+  its current document.
 - The drift table squeezed the resource/summary columns into one-character
   vertical text on narrow windows; the table now scrolls horizontally instead
   (the only page missing a `scroll.x`, now aligned with the other pages).

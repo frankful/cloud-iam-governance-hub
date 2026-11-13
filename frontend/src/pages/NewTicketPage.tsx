@@ -1106,8 +1106,11 @@ export default function NewTicketPage() {
       return;
     }
     inlineDetailRef.current = policyName;
+    // 内联策略必须走 /aws/inline-policies/:id（GetInlinePolicy）；此前调用的
+    // /aws/policies/:id 只查托管策略表，内联策略必然 404，被 catch 吞掉后
+    // 编辑器预填为空。
     api
-      .getPolicy(option.value)
+      .getInlinePolicy(option.value)
       .then((detail) => {
         if (detail.policy_document) {
           form.setFieldValue(
