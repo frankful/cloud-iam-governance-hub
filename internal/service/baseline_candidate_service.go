@@ -117,6 +117,12 @@ type BaselineCandidateReport struct {
 	Conflicts            []BaselineConflict     `json:"conflicts"`
 	Relationships        []BaselineRelationship `json:"relationships"`
 	Counts               map[string]int         `json:"counts"`
+	// AdoptedKeys 是「历史基线声明过且对应发布已 apply」的资源键集合（键格式
+	// 见 loadAdoptedKeys）。生成声明文件时命中即剥离首次纳管 import 块——
+	// 资源已在 Terraform state 里，残留的 import 块只是 diff 噪音与地址漂移
+	// 隐患（docs/pending-issues.md §25 方案 1）。json:"-"：内部索引，不进
+	// 报告/台账。
+	AdoptedKeys map[string]bool `json:"-"`
 }
 
 // Build 汇总一次账号的基线候选集。只读：不改库存、不生成文件、不碰仓库。
@@ -147,10 +153,16 @@ func (service *BaselineCandidateService) Build(
 	if err != nil {
 		return nil, err
 	}
+	adopted, err := service.loadAdoptedKeys(ctx, report.AccountDBID)
+	if err != nil {
+		return nil, err
+	}
+	report.AdoptedKeys = adopted
 	resource, err := service.collectResources(ctx, report, declared)
 	if err != nil {
 		return nil, err
 	}
+	stripAdoptedImports(resource, adopted)
 	report.Resources = resource
 	report.Conflicts = detectBaselineConflicts(resource)
 	report.Relationships, err = service.collectRelationships(ctx, report.AccountDBID)
@@ -602,6 +614,67 @@ func (service *BaselineCandidateService) declaredResources(
 		return nil, fmt.Errorf("iterate declaring tickets: %w", err)
 	}
 	return declared, nil
+}
+
+// stripAdoptedImports 是台账 25 方案 1 的核心：已被历史基线 apply 收编的
+// 资源不再写首次纳管 import 块。判定只影响 import 块，不影响声明内容——
+// 实态快照照常生成，内容与 main 的差异照常走发布门禁（这样采纳过的文件会
+// 随下一次基线自然收敛成纯声明，diff 里只剩 import 块与注释头的移除）。
+func stripAdoptedImports(resources []BaselineResource, adopted map[string]bool) {
+	for i := range resources {
+		item := &resources[i]
+		if item.Decision != BaselineDecisionCandidate || item.ImportID == "" {
+			continue
+		}
+		if adopted[declarationResourceKey(*item)] ||
+			(item.FileKey != "" && adopted["file:"+item.FileKey]) {
+			item.ImportID = ""
+		}
+	}
+}
+
+// loadAdoptedKeys 返回本账号「历史基线声明过、且对应发布已 apply」的资源键
+// 集合。三种键：
+//   - "<resource_key>"        资源与关系声明（kind:name / ownerKind:owner:
+//     inline:name / attachment:kind:name:arn / membership:group:<group>）；
+//   - "file:<file_key>"       声明落过的文件；
+//   - "res:<kind>:<name>"     资源类声明的冗余键（防御 resource_key 规则调整）。
+//
+// 刻意不按 superseded_at 过滤：新基线发布会把旧声明行标成 REPLACED，但旧
+// apply 已经把资源写进了 Terraform state——「是否进过 state」才是 import 块
+// 该不该出现的判据，与当前声明归属无关。发布未 apply（applied_at IS NULL）
+// 的行不进来：文件在 main 上但资源还没进 state，此时 import 块必须保留。
+func (service *BaselineCandidateService) loadAdoptedKeys(
+	ctx context.Context,
+	accountDBID int64,
+) (map[string]bool, error) {
+	rows, err := service.db.QueryContext(ctx, `
+		SELECT COALESCE(d.kind, ''), COALESCE(d.name, ''),
+		       COALESCE(d.file_key, ''), COALESCE(d.resource_key, '')
+		FROM iam_baseline_declaration d
+		JOIN iam_baseline_publication p ON p.id = d.publication_id
+		WHERE d.account_id = $1 AND p.applied_at IS NOT NULL`, accountDBID)
+	if err != nil {
+		return nil, fmt.Errorf("load adopted baseline declarations: %w", err)
+	}
+	defer rows.Close()
+	keys := make(map[string]bool, 64)
+	for rows.Next() {
+		var kind, name, fileKey, resourceKey string
+		if err := rows.Scan(&kind, &name, &fileKey, &resourceKey); err != nil {
+			return nil, fmt.Errorf("scan adopted baseline declaration: %w", err)
+		}
+		if fileKey != "" {
+			keys["file:"+fileKey] = true
+		}
+		if resourceKey != "" {
+			keys[resourceKey] = true
+		}
+		if kind != "" && name != "" {
+			keys["res:"+kind+":"+name] = true
+		}
+	}
+	return keys, rows.Err()
 }
 
 // BaselineKind* 是资源种类的稳定标识，同时用于文件 key 前缀。

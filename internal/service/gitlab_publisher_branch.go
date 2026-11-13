@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -319,8 +320,15 @@ func (publisher *GitLabSDKPublisher) upsertBranchFile(
 		&gitlab.GetFileOptions{Ref: gitlab.String(branch)},
 		gitlab.WithContext(ctx),
 	)
-	if err == nil && file != nil && file.Content == content {
-		return nil
+	if err == nil && file != nil {
+		// GitLab contents API 的 content 恒为 base64（与 FetchTerraformFile
+		// 同一约定）：先解码再比对。拿编码后的 blob 与明文比较，「内容相同
+		// 跳过」永不命中，每次重试都会重复提交同一个文件。
+		if decoded, decodeErr := base64.StdEncoding.DecodeString(
+			strings.Join(strings.Fields(file.Content), ""),
+		); decodeErr == nil && string(decoded) == content {
+			return nil
+		}
 	}
 	updateOptions := &gitlab.UpdateFileOptions{
 		Branch:        gitlab.String(branch),

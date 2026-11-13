@@ -14,6 +14,10 @@ semantic versioning.
 
 ### Fixed
 
+- The GitLab per-file commit fallback compared the raw (base64-encoded) API
+  response against the desired plaintext, so the "content unchanged, skip"
+  short-circuit never matched and every retry re-committed identical files.
+  Content is decoded before comparing, matching the read path.
 - The inline-policy change form prefilled its editor from the managed-policy
   endpoint, which never contains inline policies; the fetch failed silently
   and the editor opened empty even though the inventory listed the policy. It
@@ -29,6 +33,20 @@ semantic versioning.
   before use, matching the GitHub publisher.
 
 ### Changed
+
+- Baseline declarations stop emitting first-time-adoption `import` blocks for
+  resources a previously *applied* baseline publication already owns. An
+  `import` block is a one-shot action: once the resource is in Terraform state
+  the leftover block is dead weight in every future diff and a real hazard
+  when a resource label drifts (the same object can be imported again under a
+  new address, leaving two state entries fighting each other). Adoption is
+  judged from baseline declarations joined with their publication's
+  `applied_at`; declared-but-not-yet-applied baselines keep their imports, and
+  adopted files converge back to pure declarations on the next re-baseline.
+  Baseline MR titles now carry a `Baseline-Publications: <id>[,<id>…]` trailer
+  so CI can post per-publication apply results to
+  `POST /aws/baseline-publications/:id/apply-result` (the GitLab default merge
+  commit includes only the MR title, hence the trailer lives there).
 
 - Test fixtures no longer use real production resource naming
   (`agentic-commerce-prod-*`, `tdfos-prod-group`, `infra-eks1-nodegroup-role`,

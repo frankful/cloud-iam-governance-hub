@@ -585,3 +585,77 @@ func TestDeclaredResourcesOnlyCountsSuccessfulTickets(t *testing.T) {
 			queries)
 	}
 }
+
+// TestLoadAdoptedKeys 回归台账 25 方案 1：键集合要同时覆盖 resource_key、
+// file_key 与冗余的 res:<kind>:<name>；查询必须 join 发布台账并要求
+// applied_at 非空（发布未 apply 的行不能算「已进 state」）。
+func TestLoadAdoptedKeys(t *testing.T) {
+	fake := &bundleFakeDB{}
+	fake.add("iam_baseline_declaration d", []string{"kind", "name", "file_key", "resource_key"}, [][]driver.Value{
+		{"role", "app-server", "role-app-server", "role:app-server"},
+		{"attachment", "app-logs", "attachment-role-app-server-app-logs", "attachment:role:app-server:arn:aws:iam::123456789012:policy/app-logs"},
+	})
+
+	database := sql.OpenDB(fake)
+	defer database.Close()
+	service := NewBaselineCandidateService(database)
+	keys, err := service.loadAdoptedKeys(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("loadAdoptedKeys: %v", err)
+	}
+	for _, want := range []string{
+		"file:role-app-server",
+		"role:app-server",
+		"res:role:app-server",
+		"attachment:role:app-server:arn:aws:iam::123456789012:policy/app-logs",
+	} {
+		if !keys[want] {
+			t.Errorf("adopted keys missing %q; got %v", want, keys)
+		}
+	}
+	queries := strings.Join(fake.recordedQueries(), "\n")
+	for _, want := range []string{
+		"iam_baseline_publication p ON p.id = d.publication_id",
+		"p.applied_at IS NOT NULL",
+		"superseded_at",
+	} {
+		if strings.Contains(queries, want) != (want != "superseded_at") {
+			t.Errorf("adopted query should %s %q:/n%s",
+				map[bool]string{true: "contain", false: "not contain"}[want != "superseded_at"],
+				want, queries)
+		}
+	}
+}
+
+// TestStripAdoptedImports 回归台账 25 方案 1：candidate 且命中 adopted 键的
+// 资源剥离 import（resource_key 与 file 两种键都能命中）；跳过类资源、未
+// 命中的资源、ImportID 已空的资源都保持不变。
+func TestStripAdoptedImports(t *testing.T) {
+	adopted := map[string]bool{
+		"role:app-server":      true,
+		"file:user-deploy-bot": true,
+	}
+	resources := []BaselineResource{
+		{Kind: BaselineKindRole, Name: "app-server", Decision: BaselineDecisionCandidate, ImportID: "app-server"},
+		{Kind: BaselineKindUser, Name: "deploy-bot", Decision: BaselineDecisionCandidate, ImportID: "deploy-bot", FileKey: "user-deploy-bot"},
+		{Kind: BaselineKindGroup, Name: "release-managers", Decision: BaselineDecisionCandidate, ImportID: "release-managers"},
+		{Kind: BaselineKindPolicy, Name: "app-logs", Decision: BaselineDecisionSkippedExternal, ImportID: "arn:policy"},
+		{Kind: BaselineKindRole, Name: "no-import", Decision: BaselineDecisionCandidate},
+	}
+	stripAdoptedImports(resources, adopted)
+	if resources[0].ImportID != "" {
+		t.Errorf("adopted role import should be stripped, got %q", resources[0].ImportID)
+	}
+	if resources[1].ImportID != "" {
+		t.Errorf("adopted-by-file user import should be stripped, got %q", resources[1].ImportID)
+	}
+	if resources[2].ImportID != "release-managers" {
+		t.Errorf("un-adopted group import must stay, got %q", resources[2].ImportID)
+	}
+	if resources[3].ImportID != "arn:policy" {
+		t.Errorf("skipped resource must be untouched, got %q", resources[3].ImportID)
+	}
+	if resources[4].ImportID != "" {
+		t.Errorf("empty import must stay empty, got %q", resources[4].ImportID)
+	}
+}

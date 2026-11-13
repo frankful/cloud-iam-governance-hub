@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -456,8 +457,12 @@ func (service *BaselinePublishService) Run(ctx context.Context, publicationID in
 	body = appendDeferredSection(body, deferredConflicts)
 	result, err := service.publisher.PublishBranch(runCtx, BranchPublishRequest{
 		Branch: branch,
-		Title: fmt.Sprintf("IAM baseline for account %s (inventory run %d)",
-			awsAccountID, syncRunID),
+		// Baseline-Publications trailer（phase4 §8）：CI 合并后从 commit
+		// message 解析 publication id，回调 apply-result 记账 applied_at。
+		// 放标题而不是描述：GitLab 默认 merge commit 只带 MR 标题，描述不进
+		// commit message，push pipeline 里读不到。
+		Title: fmt.Sprintf("IAM baseline for account %s (inventory run %d) — Baseline-Publications: %d",
+			awsAccountID, syncRunID, publicationID),
 		Body:  body,
 		Files: files,
 	})
@@ -638,8 +643,11 @@ func (service *BaselinePublishService) RunBatch(
 		}
 	}
 	result, err := service.publisher.PublishBranch(runCtx, BranchPublishRequest{
+		// 与单账号发布同一 trailer 约定：批量 PR 对应多个 publication id，
+		// CI 逐个回调 apply-result（幂等）。
 		Branch: branch,
-		Title:  fmt.Sprintf("IAM baseline batch: %d accounts", len(items)),
+		Title: fmt.Sprintf("IAM baseline batch: %d accounts — Baseline-Publications: %s",
+			len(items), baselinePublicationIDs(items)),
 		Body: appendDeferredSection(fmt.Sprintf(
 			"Generated baseline bundles for %d AWS accounts in one batch.\n\n"+
 				"Accounts: %s\nFiles: %d (resources + relationships, with import blocks).\n\n"+
@@ -1352,6 +1360,17 @@ func accountList(items []batchItem) string {
 		names = append(names, item.awsAccount)
 	}
 	return strings.Join(names, ", ")
+}
+
+// baselinePublicationIDs 渲染 MR 标题里的 Baseline-Publications trailer
+// 值（逗号分隔的 publication id，顺序与 accountList 一致）。CI 在合并后
+// 从 commit message 解析这串 id，逐个回调 apply-result。
+func baselinePublicationIDs(items []batchItem) string {
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, strconv.FormatInt(item.id, 10))
+	}
+	return strings.Join(ids, ",")
 }
 
 // collectBatchDeferred 汇总批量发布里各账号的让路文件。文件 key 只在账号

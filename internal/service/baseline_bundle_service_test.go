@@ -652,3 +652,23 @@ func TestCanonicalJSONSortsKeys(t *testing.T) {
 		t.Errorf("canonical JSON = %s", first)
 	}
 }
+
+// TestBaselineAttachmentImportID 回归台账 25 方案 1：历史基线已 apply 收编
+// 的挂载不再带 import ID；未收编的渲染 <principal>/<arn>；nil map 安全。
+func TestBaselineAttachmentImportID(t *testing.T) {
+	adopted := map[string]bool{
+		"attachment:role:app-server:arn:aws:iam::123456789012:policy/app-logs": true,
+	}
+	if got := baselineAttachmentImportID(adopted, "role", "app-server",
+		"arn:aws:iam::123456789012:policy/app-logs"); got != "" {
+		t.Errorf("adopted attachment import = %q, want empty", got)
+	}
+	if got := baselineAttachmentImportID(adopted, "role", "app-server",
+		"arn:aws:iam::123456789012:policy/other"); got != "app-server/arn:aws:iam::123456789012:policy/other" {
+		t.Errorf("un-adopted attachment import = %q", got)
+	}
+	if got := baselineAttachmentImportID(nil, "user", "deploy-bot",
+		"arn:aws:iam::123456789012:policy/app-logs"); got != "deploy-bot/arn:aws:iam::123456789012:policy/app-logs" {
+		t.Errorf("nil adopted map must behave as empty, got %q", got)
+	}
+}

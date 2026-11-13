@@ -552,7 +552,7 @@ func (service *BaselineBundleService) Build(
 			if fileKey == "" {
 				continue
 			}
-			importID := name + "/" + attachment
+			importID := baselineAttachmentImportID(report.AdoptedKeys, kind, name, attachment)
 			content, genErr := service.adapter.GenerateAttachPolicyTerraform(
 				parts[0], name, attachment, importID,
 				adapter.DefaultAttachmentLabel(parts[0], name, attachment),
@@ -709,6 +709,17 @@ func bundleContentHash(files []BaselineBundleFile) string {
 // declarationResourceKey 生成资源级声明 key。内联策略必须带主体：策略名
 // 只在主体内唯一，同名的 s3-access 可能同时挂在角色与用户上，不带主体就
 // 会在声明表里互相覆盖（唯一索引 account_id + resource_key）。
+// baselineAttachmentImportID 渲染挂载文件的首次纳管 import ID。台账 25
+// 方案 1：这条挂载已被历史基线 apply 收编进 state（adopted 命中）时返回
+// 空串——资源已在 state，残留的 import 块只会制造 diff 噪音与地址漂移
+// 隐患；membership 不支持 import，无此问题。nil map 安全。
+func baselineAttachmentImportID(adopted map[string]bool, kind, name, attachment string) string {
+	if adopted["attachment:"+kind+":"+name+":"+attachment] {
+		return ""
+	}
+	return name + "/" + attachment
+}
+
 func declarationResourceKey(item BaselineResource) string {
 	if item.Kind == BaselineKindInlinePolicy {
 		return item.OwnerKind + ":" + item.Owner + ":inline:" + item.Name
