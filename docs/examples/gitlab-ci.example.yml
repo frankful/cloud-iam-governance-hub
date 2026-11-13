@@ -1,5 +1,7 @@
 # .gitlab-ci.yml — GitLab CI 接线示例（cloud-iam-governance-hub）
 #
+# 英文版（内容同源，仅注释与日志文案为英文）：docs/examples/gitlab-ci.example.en.yml
+#
 # 放在基线仓库根目录（与 TF_ROOT 指向的目录同级）。平台负责发布分支/MR，
 # 这个 pipeline 负责逐账号 terraform init/plan/apply。
 #

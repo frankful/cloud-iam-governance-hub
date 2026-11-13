@@ -1,0 +1,360 @@
+# .gitlab-ci.yml — GitLab CI wiring example (cloud-iam-governance-hub)
+#
+# Place at the root of the baseline repository (sibling of the directory
+# TF_ROOT points to). The platform publishes branches/MRs; this pipeline
+# runs terraform init/plan/apply per account.
+#
+# Prerequisites (GitLab CI/CD variables, Masked + Protected):
+#   STATE_BUCKET     state bucket name (reuse the existing bucket if any)
+#   STATE_REGION     the bucket's real region
+#   PLATFORM_URL     platform API base URL (for apply-result callbacks)
+#   PLATFORM_TOKEN   platform token. NOTE: the apply-result endpoints
+#                    currently require the platform_admin role; a
+#                    least-privilege token gets 403. Switch to a dedicated
+#                    CI role once G3 (least-privilege CI access) lands;
+#                    until then only a platform_admin token works.
+# Manual variables (optional):
+#   MODE=apply       a manually-run pipeline really applies (manual
+#                    pipelines default to plan only)
+#   DIFF_ALL=true    scan all account directories, ignore the diff
+#                    (first validation / first full run)
+#   DIFF_ALL=false   manual pipeline uses the diff path too; a manual
+#                    pipeline without DIFF_ALL defaults to full scan
+#
+# Repository layout:
+#   .gitlab-ci.yml
+#   iam/                      <- TF_ROOT (platform MRs only touch files
+#                                under iam/account-<id>/)
+#     versions.tf             <- MUST exist: empty `backend "s3" {}` block;
+#                                account dirs fail to be provisioned without it
+#     account-<aws account id>/...tf
+#
+# Runner: docker executor; the container obtains AWS credentials from the
+# host's instance profile (network_mode = "host" + IMDS via the SDK default
+# chain — the script never fabricates temporary credentials); NO_PROXY must
+# include 169.254.169.254.
+#
+# 2026-11-13 fixes (root causes of "no account-*/ changed, skipping" after
+# ticket MR merges / manual pipelines failing within the first second with
+# zero output):
+#   a) `DIRS=$(grep ... )` under the runner's `set -e` + pipefail: a grep
+#      with no match makes the whole pipeline return 1 = the script exits
+#      silently with 1. The log shows only a collapsed `set -eu` line with
+#      no error text. Every match-optional pipeline now ends in `|| true`,
+#      and progress is printed before the assignments.
+#   b) `[ "$RUN_MODE" = "plan" ] && { ...; }` AND-list style is not
+#      portable across shells; rewritten as if-statements (defensive —
+#      busybox ash/bash do not actually trigger it).
+#   c) Copying versions.tf BEFORE checking whether a directory has .tf
+#      files makes an empty account dir look non-empty and plans a
+#      full-page destroy. Resource files (excluding versions.tf) are now
+#      checked first, then versions.tf is copied in.
+#   d) A merge commit's default message does not necessarily carry the MR
+#      title (the Baseline-Publications trailer and the IAM-xxxx ticket id
+#      live in the title). When the commit message has neither, the job
+#      now looks up the merge requests of that commit via the GitLab API.
+#   e) RBAC correction: apply-result currently requires platform_admin
+#      (see above); the old "do not use a platform_admin token" note was
+#      the opposite of the implementation and has been fixed.
+#   f) Ticket numbers normalized to uppercase: the platform stores ticket
+#      numbers as uppercase hex, but a GitLab merge commit's first line
+#      `Merge branch '.../iam-xxx'` carries the lowercase form and precedes
+#      the MR title, so the case-insensitive grep matched it first and the
+#      callback 404'd on lookup (observed 2026-11-13). Every match is
+#      normalized to uppercase with tr.
+#
+# Note: the platform itself polls the commit's pipeline status, so the
+# apply-result callback is a fast path, not the only path; a failed
+# callback never leaves a ticket stuck forever.
+
+stages: [verify, deploy]
+
+# Manual variables are invisible to rules on some GitLab versions; rules
+# must never depend on them
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - when: never
+
+variables:
+  TF_ROOT: "iam"
+  STATE_KEY_PREFIX: "iam-governance-hub"
+  TF_IN_AUTOMATION: "1"
+  GIT_DEPTH: "0"          # full history of all branches; diff needs the base commit
+
+# The only loop: determine account scope -> per-account init/plan/apply
+.terraform-loop:
+  script:
+    # 1. Determine the account directories for this run
+    # Red line: every $(pipeline) in this block MUST end in || true. With
+    # pipefail globally enabled, grep/ls finding no match (exit 1, no
+    # stderr) makes set -e silently kill the whole job (log signature:
+    # zero output after the collapsed `set -eu` block, straight to
+    # after_script — confirmed 2026-11-13).
+    # Note: no line continuations, no nested parameter expansion — if a
+    # paste into the GitLab web IDE introduces CRLF or drops a line, the
+    # job fails in the first second with the error collapsed in this very
+    # section; expand its first line to locate it.
+    - |
+      set -eu
+      echo "[1/3] computing account directories (source=${CI_PIPELINE_SOURCE:-?} DIFF_ALL=${DIFF_ALL:-})"
+      # A manual Run pipeline defaults to a full scan: otherwise HEAD^
+      # usually has no account changes and the run looks like a no-op
+      if [ "${DIFF_ALL:-}" = "" ] && [ "$CI_PIPELINE_SOURCE" = "web" ]; then
+        DIFF_ALL=true
+        echo "manual trigger: defaulting to full scan (DIFF_ALL=true); set DIFF_ALL=false explicitly for incremental"
+      fi
+      if [ "${DIFF_ALL:-false}" = "true" ]; then
+        DIRS=$(cd "$TF_ROOT" && ls -d account-*/ 2>/dev/null | sed 's:/$::' | sort || true)
+        [ -n "$DIRS" ] || { echo "✗ DIFF_ALL=true but no account-*/ under $TF_ROOT/"; exit 1; }
+      else
+        BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}"
+        if [ -z "$BASE" ]; then BASE="${CI_COMMIT_BEFORE_SHA:-}"; fi
+        if [ "$BASE" = "0000000000000000000000000000000000000000" ]; then BASE=""; fi
+        if [ -n "$BASE" ] && ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then BASE=""; fi
+        if [ -z "$BASE" ]; then BASE="$(git rev-parse "$CI_COMMIT_SHA^" 2>/dev/null || true)"; fi
+        if [ -n "$BASE" ]; then
+          git diff --name-only "$BASE..$CI_COMMIT_SHA" -- "$TF_ROOT/" > "$CI_PROJECT_DIR/changed-files.txt" || true
+          # grep returns 1 on no match; under set -e/pipefail that exits silently. || true is mandatory.
+          DIRS=$(grep "^$TF_ROOT/account-" "$CI_PROJECT_DIR/changed-files.txt" | cut -d/ -f2 | sort -u || true)
+          echo "diff base=$BASE"
+          echo "changed files:"
+          cat "$CI_PROJECT_DIR/changed-files.txt" || true
+        else
+          DIRS=""
+          echo "diff base=(empty: no diff base resolvable, skipping incremental)"
+        fi
+      fi
+      echo "account directories for this run: [$DIRS]"
+      if [ -z "$DIRS" ]; then
+        echo "this commit touches no $TF_ROOT/account-*/, skipping"
+        : > "$CI_PROJECT_DIR/accounts.txt"
+        exit 0
+      fi
+      printf '%s\n' $DIRS > "$CI_PROJECT_DIR/accounts.txt"
+      echo "to process: $DIRS"
+
+    # 2. Per-account init / plan / apply
+    - |
+      set -eu
+      [ -s "$CI_PROJECT_DIR/accounts.txt" ] || { echo "no accounts to process, skipping"; exit 0; }
+      if [ "$CI_PIPELINE_SOURCE" = "push" ]; then RUN_MODE="${MODE:-apply}"; else RUN_MODE="${MODE:-plan}"; fi
+      echo "run mode: $RUN_MODE"
+      [ -f "$TF_ROOT/versions.tf" ] || { echo "✗ missing $TF_ROOT/versions.tf (empty \"backend \"s3\" {}\" block) — add it first"; exit 1; }
+      while IFS= read -r a; do
+        a=$(printf '%s' "$a" | tr -d '\r')   # strip CRLF before it becomes part of a directory name
+        [ -n "$a" ] || continue
+        d="$TF_ROOT/$a"
+        echo "=== $a ==="
+        # Safety gate (2026-11-13): check for "resource files" (excluding
+        # versions.tf) BEFORE deciding whether to copy versions.tf in.
+        # The other order makes an empty account dir look non-empty and
+        # plans a full-page destroy.
+        RESOURCE_FILES=""
+        for f in "$d"/*.tf; do
+          [ -f "$f" ] || continue
+          case "$f" in */versions.tf) continue ;; esac
+          RESOURCE_FILES="$RESOURCE_FILES $f"
+        done
+        if [ -z "$RESOURCE_FILES" ]; then
+          echo "✗ no resource .tf under $d; refusing to plan against a full state (prevents full-page destroy)"
+          exit 1
+        fi
+        [ -f "$d/versions.tf" ] || cp -f "$TF_ROOT/versions.tf" "$d/"
+        terraform -chdir="$d" init -input=false -reconfigure \
+          -backend-config="bucket=$STATE_BUCKET" \
+          -backend-config="key=$STATE_KEY_PREFIX/$a/iam/terraform.tfstate" \
+          -backend-config="region=$STATE_REGION" \
+          -backend-config="use_lockfile=true"
+        # Do NOT use `plan | tee` + pipefail: on ash versions without
+        # pipefail the pipeline status is tee's 0, swallowing plan's 2
+        # (changes present) and every failure code. Capture the real exit
+        # code via a status file instead.
+        rm -f "$CI_PROJECT_DIR/plan.status"
+        set +e   # keep the in-subshell echo $? running; set -e would otherwise exit early on plan's status 2
+        { terraform -chdir="$d" plan -input=false -lock-timeout=5m -out=tfplan -detailed-exitcode 2>&1; echo $? > "$CI_PROJECT_DIR/plan.status"; } \
+          | tee "$CI_PROJECT_DIR/plan.out"
+        set -e
+        CODE=$(cat "$CI_PROJECT_DIR/plan.status" 2>/dev/null || echo 1)
+        case "$CODE" in
+          0) echo "$a: no changes" ;;
+          2) echo "$a: changes present" ;;
+          *) echo "✗ $a: plan failed"; exit 1 ;;
+        esac
+        if [ "$RUN_MODE" = "plan" ]; then
+          echo "$a: plan mode, skipping apply"
+          continue
+        fi
+        # Import sentinel (2026-11-13): the same plan containing both an
+        # import and a destroy = suspected address drift (a label change
+        # makes the old address an orphan to destroy while the same object
+        # gets imported under the new address). Abort the apply to prevent
+        # double-writing state; verify with terraform state list /
+        # state show, then converge via a moved block or manually.
+        if grep -qE '(will be imported| to import)' "$CI_PROJECT_DIR/plan.out" \
+           && grep -qE ' [1-9][0-9]* to destroy' "$CI_PROJECT_DIR/plan.out"; then
+          echo "✗ plan contains both import and destroy — suspected address drift, aborting apply"
+          exit 1
+        fi
+        terraform -chdir="$d" apply -auto-approve -input=false -lock-timeout=5m tfplan
+      done < "$CI_PROJECT_DIR/accounts.txt"
+
+.terraform-base:
+  image:
+    name: hashicorp/terraform:1.13
+    entrypoint: [""]            # override the image's default entrypoint, otherwise the script is read as terraform subcommands
+  tags: [iam-ci]
+  resource_group: iam-tfstate   # serialize pipelines so two runs never fight over the state lock
+  timeout: 2h
+  before_script:
+    - ': "${STATE_BUCKET:?missing CI/CD variable STATE_BUCKET}"'
+    - ': "${STATE_REGION:?missing CI/CD variable STATE_REGION}"'
+  script:
+    - !reference [.terraform-loop, script]
+
+# MR pipeline: plan only, no callbacks
+iam-plan:
+  extends: .terraform-base
+  stage: verify
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+# push to main applies automatically; a manual Run pipeline defaults to
+# plan only (MODE=apply to really apply)
+iam-apply:
+  extends: .terraform-base
+  stage: deploy
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+  script:
+    - !reference [.terraform-loop, script]
+    - |
+      set -eu
+      if [ "$CI_PIPELINE_SOURCE" = "push" ]; then RUN_MODE="${MODE:-apply}"; else RUN_MODE="${MODE:-plan}"; fi
+      echo "callback stage, run mode: $RUN_MODE"
+      if [ "$RUN_MODE" = "plan" ]; then
+        echo "plan mode, no callbacks"
+        exit 0
+      fi
+      [ -n "${PLATFORM_URL:-}" ] || { echo "⚠ PLATFORM_URL not set, skipping callbacks"; exit 0; }
+      [ -n "${PLATFORM_TOKEN:-}" ] || { echo "⚠ PLATFORM_TOKEN not set, skipping callbacks"; exit 0; }
+
+      notify() {
+        url="$1"; body="$2"
+        if command -v curl >/dev/null 2>&1; then
+          curl -sfS --max-time 20 -X POST "$url" \
+            -H "Authorization: Bearer $PLATFORM_TOKEN" \
+            -H "Content-Type: application/json" -d "$body"
+        else
+          wget -q -O- --timeout=20 \
+            --header="Authorization: Bearer $PLATFORM_TOKEN" \
+            --header="Content-Type: application/json" \
+            --post-data="$body" "$url"
+        fi
+      }
+
+      # A merge commit's default message does not necessarily carry the MR
+      # title (the trailer and the ticket id live in the title); when the
+      # commit message has neither, look up that commit's merge requests.
+      # Ticket numbers are stored uppercase; the merge commit's first line
+      # `Merge branch '.../iam-xxx'` has the lowercase form and precedes
+      # the title, so -oiE must be followed by normalization to uppercase
+      # or the platform's exact-match lookup 404s (confirmed 2026-11-13).
+      TICKET=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oiE 'IAM-[0-9A-F]{16}' | head -1 | tr '[:lower:]' '[:upper:]' || true)
+      BPIDS=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oE 'Baseline-Publications: [0-9,]+' | head -1 | cut -d' ' -f2 || true)
+      if { [ -z "$TICKET" ] || [ -z "$BPIDS" ]; } && [ -n "${CI_API_V4_URL:-}" ] && [ -n "${CI_PROJECT_ID:-}" ]; then
+        MRS=""
+        if command -v curl >/dev/null 2>&1; then
+          MRS=$(curl -sfS --max-time 20 --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+            "$CI_API_V4_URL/projects/$CI_PROJECT_ID/repository/commits/$CI_COMMIT_SHA/merge_requests" || true)
+        else
+          MRS=$(wget -q -O- --timeout=20 --header="JOB-TOKEN: $CI_JOB_TOKEN" \
+            "$CI_API_V4_URL/projects/$CI_PROJECT_ID/repository/commits/$CI_COMMIT_SHA/merge_requests" || true)
+        fi
+        if [ -z "$TICKET" ]; then
+          TICKET=$(printf '%s' "$MRS" | grep -oiE 'IAM-[0-9A-F]{16}' | head -1 | tr '[:lower:]' '[:upper:]' || true)
+        fi
+        if [ -z "$BPIDS" ]; then
+          BPIDS=$(printf '%s' "$MRS" | grep -oE 'Baseline-Publications: [0-9,]+' | head -1 | cut -d' ' -f2 || true)
+        fi
+      fi
+      echo "ticket: [$TICKET]  baseline publications: [$BPIDS]"
+      if [ -z "$TICKET" ] && [ -z "$BPIDS" ]; then
+        echo "no ticket id or baseline trailer in commit/MR, skipping callbacks (platform polling still covers this)"
+        exit 0
+      fi
+
+      BODY="{\"status\":\"succeeded\",\"commit_sha\":\"$CI_COMMIT_SHA\",\"ci_url\":\"$CI_JOB_URL\"}"
+      for bp in $(printf '%s' "$BPIDS" | tr ',' ' '); do
+        [ -n "$bp" ] || continue
+        if notify "$PLATFORM_URL/api/v1/aws/baseline-publications/$bp/apply-result" "$BODY"; then
+          echo "✓ baseline $bp callback OK"
+        else
+          echo "⚠ baseline $bp callback failed (platform polling still covers this)"
+        fi
+      done
+      if [ -n "$TICKET" ]; then
+        if notify "$PLATFORM_URL/api/v1/tickets/$TICKET/apply-result" "$BODY"; then
+          echo "✓ ticket $TICKET callback OK"
+        else
+          echo "⚠ ticket $TICKET callback failed (platform polling still covers this)"
+        fi
+      fi
+  after_script:
+    - |
+      # Failure fallback: report failed on apply failure/cancellation too (idempotent)
+      set +e
+      case "${CI_JOB_STATUS:-}" in
+        failed|canceled) : ;;
+        *) exit 0 ;;
+      esac
+      if [ "$CI_PIPELINE_SOURCE" = "push" ]; then RUN_MODE="${MODE:-apply}"; else RUN_MODE="${MODE:-plan}"; fi
+      [ "$RUN_MODE" = "apply" ] || exit 0
+      [ -n "${PLATFORM_URL:-}" ] || exit 0
+      [ -n "${PLATFORM_TOKEN:-}" ] || exit 0
+
+      notify() {
+        url="$1"; body="$2"
+        if command -v curl >/dev/null 2>&1; then
+          curl -sfS --max-time 20 -X POST "$url" \
+            -H "Authorization: Bearer $PLATFORM_TOKEN" \
+            -H "Content-Type: application/json" -d "$body"
+        else
+          wget -q -O- --timeout=20 \
+            --header="Authorization: Bearer $PLATFORM_TOKEN" \
+            --header="Content-Type: application/json" \
+            --post-data="$body" "$url"
+        fi
+      }
+
+      TICKET=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oiE 'IAM-[0-9A-F]{16}' | head -1 | tr '[:lower:]' '[:upper:]' || true)
+      BPIDS=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oE 'Baseline-Publications: [0-9,]+' | head -1 | cut -d' ' -f2 || true)
+      if { [ -z "$TICKET" ] || [ -z "$BPIDS" ]; } && [ -n "${CI_API_V4_URL:-}" ] && [ -n "${CI_PROJECT_ID:-}" ]; then
+        MRS=""
+        if command -v curl >/dev/null 2>&1; then
+          MRS=$(curl -sfS --max-time 20 --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+            "$CI_API_V4_URL/projects/$CI_PROJECT_ID/repository/commits/$CI_COMMIT_SHA/merge_requests" || true)
+        else
+          MRS=$(wget -q -O- --timeout=20 --header="JOB-TOKEN: $CI_JOB_TOKEN" \
+            "$CI_API_V4_URL/projects/$CI_PROJECT_ID/repository/commits/$CI_COMMIT_SHA/merge_requests" || true)
+        fi
+        if [ -z "$TICKET" ]; then
+          TICKET=$(printf '%s' "$MRS" | grep -oiE 'IAM-[0-9A-F]{16}' | head -1 | tr '[:lower:]' '[:upper:]' || true)
+        fi
+        if [ -z "$BPIDS" ]; then
+          BPIDS=$(printf '%s' "$MRS" | grep -oE 'Baseline-Publications: [0-9,]+' | head -1 | cut -d' ' -f2 || true)
+        fi
+      fi
+      BODY="{\"status\":\"failed\",\"commit_sha\":\"$CI_COMMIT_SHA\",\"ci_url\":\"$CI_JOB_URL\"}"
+      for bp in $(printf '%s' "$BPIDS" | tr ',' ' '); do
+        [ -n "$bp" ] || continue
+        notify "$PLATFORM_URL/api/v1/aws/baseline-publications/$bp/apply-result" "$BODY" \
+          || echo "⚠ baseline $bp failed-callback failed"
+      done
+      if [ -n "$TICKET" ]; then
+        notify "$PLATFORM_URL/api/v1/tickets/$TICKET/apply-result" "$BODY" \
+          || echo "⚠ ticket $TICKET failed-callback failed"
+      fi
