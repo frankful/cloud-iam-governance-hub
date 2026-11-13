@@ -25,6 +25,13 @@ semantic versioning.
 
 ### Fixed
 
+- Ticket lookups are now case-insensitive on the ticket number. Numbers are
+  generated as uppercase hex, but every lookup matched the stored value
+  exactly, so a CI callback carrying the lowercase form (a GitLab merge
+  commit's first line names the branch, not the title) got a 404 and the
+  ticket was never closed by the callback. Normalisation happens at the
+  service entry points, so close, approval, retry and polling paths all
+  accept the same input.
 - The GitLab per-file commit fallback compared the raw (base64-encoded) API
   response against the desired plaintext, so the "content unchanged, skip"
   short-circuit never matched and every retry re-committed identical files.

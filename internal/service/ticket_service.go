@@ -4466,8 +4466,18 @@ func (service *TicketService) PreviewValidation(
 	return service.validateTicketRequest(ctx, request)
 }
 
+// normalizeTicketNo 统一工单号的大小写与空白。工单号由平台生成，永远是
+// "IAM-" + 16 位大写十六进制，ticket_no 按值精确匹配（uniqueIndex）。
+// 外部调用方可能带小写或空白：GitLab merge commit 的首行是
+// `Merge branch '.../iam-xxx'`，分支名里就是小写；2026-11-13 的 apply-result
+// 回调因此查不到工单而 404，工单没有被自动关闭。大小写不是工单的身份，
+// 在所有对外入口收口，避免同一条工单因写法不同而不可达。
+func normalizeTicketNo(ticketNo string) string {
+	return strings.ToUpper(strings.TrimSpace(ticketNo))
+}
+
 func (service *TicketService) GetApprovalInfo(ctx context.Context, ticketNo string) (model.TicketApprovalInfo, error) {
-	ticketNo = strings.TrimSpace(ticketNo)
+	ticketNo = normalizeTicketNo(ticketNo)
 	if ticketNo == "" {
 		return model.TicketApprovalInfo{}, apperr.Validation("ticket number must not be empty")
 	}
@@ -4490,7 +4500,7 @@ func (service *TicketService) ListAvailableApprovers(ctx context.Context, accoun
 }
 
 func (service *TicketService) GetTicket(ctx context.Context, ticketNo string) (model.IAMTicket, error) {
-	ticketNo = strings.TrimSpace(ticketNo)
+	ticketNo = normalizeTicketNo(ticketNo)
 	if ticketNo == "" {
 		return model.IAMTicket{}, errors.New("ticket number must not be empty")
 	}
@@ -4531,6 +4541,7 @@ func (service *TicketService) Decide(
 	approver string,
 	decision TicketDecision,
 ) (model.IAMTicket, error) {
+	ticketNo = normalizeTicketNo(ticketNo)
 	approver = strings.TrimSpace(approver)
 	if approver == "" {
 		return model.IAMTicket{}, apperr.Validation("approver must not be empty")
@@ -4571,6 +4582,7 @@ func (service *TicketService) CloseTicket(
 	comment string,
 	triggerSync bool,
 ) (model.IAMTicket, error) {
+	ticketNo = normalizeTicketNo(ticketNo)
 	actorID = strings.TrimSpace(actorID)
 	if actorID == "" {
 		return model.IAMTicket{}, errors.New("actor ID must not be empty")
@@ -4683,7 +4695,7 @@ func (service *TicketService) RecordCIApplyResult(
 	ticketNo, actorID string,
 	result CIApplyResult,
 ) (model.IAMTicket, bool, error) {
-	ticketNo = strings.TrimSpace(ticketNo)
+	ticketNo = normalizeTicketNo(ticketNo)
 	if ticketNo == "" {
 		return model.IAMTicket{}, false, apperr.Validation("ticket number must not be empty")
 	}
@@ -4855,7 +4867,7 @@ func (service *TicketService) RetryPublication(ctx context.Context, ticketNo str
 // first poll. The ticket keeps its APPROVED state throughout: the PR
 // remains mergeable and the platform keeps observing it.
 func (service *TicketService) RearmPolling(ctx context.Context, ticketNo string) error {
-	ticketNo = strings.TrimSpace(ticketNo)
+	ticketNo = normalizeTicketNo(ticketNo)
 	if ticketNo == "" {
 		return errors.New("ticket number must not be empty")
 	}
@@ -4915,6 +4927,7 @@ func isPollableTicketStatus(status string) bool {
 }
 
 func (service *TicketService) MarkMerged(ctx context.Context, ticketNo string) error {
+	ticketNo = normalizeTicketNo(ticketNo)
 	return service.repository.SetStatus(ctx, ticketNo, TicketStatusApproved, TicketStatusMerged)
 }
 
@@ -5920,6 +5933,11 @@ const iamTicketColumns = `id, ticket_no, ticket_type, account_id, principal_name
 		git_merge_state, git_ci_state, git_apply_result`
 
 func (repository *SQLTicketRepository) Get(ctx context.Context, ticketNo string) (model.IAMTicket, error) {
+	// 纵深防御：服务层入口已用 normalizeTicketNo 收口，这里再归一化一次，
+	// 兜住直接调用仓储的路径（后台任务用库里的值，本来就是大写）。工单号
+	// 永远是 "IAM-" + 16 位大写 hex，ticket_no 按值精确匹配；2026-11-13 的
+	// apply-result 404 就是小写工单号查不到记录导致的。
+	ticketNo = normalizeTicketNo(ticketNo)
 	ticket, err := scanIAMTicket(repository.db.QueryRowContext(ctx, `SELECT `+iamTicketColumns+`
 		FROM iam_ticket WHERE ticket_no = $1`, ticketNo))
 	if errors.Is(err, sql.ErrNoRows) {

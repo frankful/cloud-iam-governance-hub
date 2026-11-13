@@ -156,6 +156,8 @@ func (repository *memoryTicketRepository) GetEnabledBaseline(
 }
 
 func (repository *memoryTicketRepository) Get(_ context.Context, ticketNo string) (model.IAMTicket, error) {
+	// 刻意保持大小写敏感，和 Postgres 的 `ticket_no = $1` 精确匹配一致：
+	// 归一化是服务层入口的职责，假仓储跟着归一化会把那里的回归掩盖掉。
 	ticket, exists := repository.tickets[ticketNo]
 	if !exists {
 		return model.IAMTicket{}, ErrTicketNotFound
@@ -5605,6 +5607,30 @@ func TestCreateGroupAdoptionRejectsAlreadyAdopted(t *testing.T) {
 }
 
 // A1 预留接口：CI 自动 apply 后的回调语义。
+// TestRecordCIApplyResultToleratesLowercaseTicketNo 回归 2026-11-13 的 404：
+// GitLab merge commit 的首行是 `Merge branch '.../iam-xxx'`（小写），CI 把
+// 小写工单号原样塞进回调 URL，平台按 ticket_no 精确查库查不到 → 404，工单
+// 不会被自动关闭。工单号大小写不是身份，读取入口必须归一化。
+func TestRecordCIApplyResultToleratesLowercaseTicketNo(t *testing.T) {
+	repository := newMemoryTicketRepository()
+	service, err := NewTicketService(repository, &memoryTicketPublisher{}, nil)
+	if err != nil {
+		t.Fatalf("NewTicketService() error = %v", err)
+	}
+	const ticketNo = "IAM-6BD65A379E75B2BB"
+	seedApprovedTicketWithPR(repository, ticketNo, "team/iac", "31")
+
+	ticket, closed, err := service.RecordCIApplyResult(context.Background(),
+		"iam-6bd65a379e75b2bb", "ci-runner",
+		CIApplyResult{Status: CIApplyStatusSucceeded, CommitSHA: "abc123"})
+	if err != nil || !closed {
+		t.Fatalf("RecordCIApplyResult(lowercase ticket no) = closed %v, error %v", closed, err)
+	}
+	if ticket.TicketNo == nil || *ticket.TicketNo != ticketNo {
+		t.Fatalf("ticket no = %v, want %s", ticket.TicketNo, ticketNo)
+	}
+}
+
 func TestRecordCIApplyResult(t *testing.T) {
 	newService := func(t *testing.T) (*TicketService, *memoryTicketRepository) {
 		t.Helper()
