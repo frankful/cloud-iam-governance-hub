@@ -52,27 +52,28 @@ variables:
 .terraform-loop:
   script:
     # ① 确定本次要处理的账号目录（2026-11-13 修复版，见文件头注释）
+    # 注意：整段无续行符、无嵌套参数展开——GitLab web IDE 粘贴时若混入 CRLF
+    # 或漏行，job 会在第一秒失败且报错折叠在本段里，展开首行即可定位。
     - |
       set -eu
       if [ "${DIFF_ALL:-false}" = "true" ]; then
-        # 首次验证 / 首次全量: 扫全部账号目录, 不看 diff
         DIRS=$(cd "$TF_ROOT" && ls -d account-*/ 2>/dev/null | sed 's:/$::' | sort)
       else
-        BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-${CI_COMMIT_BEFORE_SHA:-}}"
-        if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
-           || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
-          BASE="$(git rev-parse "$CI_COMMIT_SHA^" 2>/dev/null || true)"   # merge commit: 第一父提交
-        fi
+        BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}"
+        if [ -z "$BASE" ]; then BASE="${CI_COMMIT_BEFORE_SHA:-}"; fi
+        if [ "$BASE" = "0000000000000000000000000000000000000000" ]; then BASE=""; fi
+        if [ -n "$BASE" ] && ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then BASE=""; fi
+        if [ -z "$BASE" ]; then BASE="$(git rev-parse "$CI_COMMIT_SHA^" 2>/dev/null || true)"; fi
         if [ -n "$BASE" ]; then
-          # 不用带尾斜杠的 glob pathspec；全量 diff 落文件，改动清单可观察
-          git diff --name-only "$BASE..$CI_COMMIT_SHA" -- "$TF_ROOT/" \
-            > "$CI_PROJECT_DIR/changed-files.txt" || true
-          DIRS=$(grep "^$TF_ROOT/account-" "$CI_PROJECT_DIR/changed-files.txt" \
-                 | cut -d/ -f2 | sort -u)
+          git diff --name-only "$BASE..$CI_COMMIT_SHA" -- "$TF_ROOT/" > "$CI_PROJECT_DIR/changed-files.txt" || true
+          DIRS=$(grep "^$TF_ROOT/account-" "$CI_PROJECT_DIR/changed-files.txt" | cut -d/ -f2 | sort -u)
+          echo "diff base=$BASE"
+          echo "changed files:"
+          cat "$CI_PROJECT_DIR/changed-files.txt"
         else
           DIRS=""
+          echo "diff base=(空: 取不到对比基线, 不做增量)"
         fi
-        echo "diff base=$BASE"
       fi
       echo "本次执行收敛的 account-*/ 路径: [$DIRS]"
       if [ -z "$DIRS" ]; then echo "本次提交未改动 $TF_ROOT/account-*/, 跳过"; exit 0; fi
@@ -82,12 +83,13 @@ variables:
     # ② 逐账号 init / plan / apply
     - |
       set -eu
-      set -o pipefail   # plan 输出经 tee 落盘，失败码必须穿透管道
+      set -o pipefail 2>/dev/null || true   # plan 输出经 tee 落盘，失败码要穿透管道；老 ash 不支持时降级
       if [ "$CI_PIPELINE_SOURCE" = "push" ]; then RUN_MODE="${MODE:-apply}"; else RUN_MODE="${MODE:-plan}"; fi
       echo "运行模式: $RUN_MODE"
       while read -r a; do
         [ -n "$a" ] || continue
         d="$TF_ROOT/$a"
+        [ -f "$TF_ROOT/versions.tf" ] || { echo "✗ 缺少 $TF_ROOT/versions.tf（backend \"s3\" {} 空块），先补上"; exit 1; }
         [ -f "$d/versions.tf" ] || cp -f "$TF_ROOT/versions.tf" "$d/"
         set -- "$d"/*.tf
         if [ "$1" = "$d/*.tf" ]; then
