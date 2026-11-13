@@ -9,14 +9,14 @@
 #   STATE_BUCKET     state 桶名（沿用既有 state 时即原桶）
 #   STATE_REGION     state 桶的真实 region
 #   PLATFORM_URL     平台 API 地址（apply-result 回调用）
-#   PLATFORM_TOKEN   平台 token。注意：apply-result 接口当前要求
-#                    platform_admin 角色，最小权限的普通 token 会 403。
-#                    G3（CI 接入最小权限）落地后再换成专用 CI 角色；
-#                    在那之前只能用 platform_admin token。
+#   PLATFORM_TOKEN   平台 token。注意：apply-result 路由当前是
+#                    RequireRoles("platform_admin")，最小权限的普通 token
+#                    会 403。G3（CI 接入最小权限）落地后再换成专用
+#                    CI 角色；在那之前只能用 platform_admin token。
 # 手动变量（可选）：
 #   MODE=apply       手动 Run pipeline 时真正 apply（默认手动只 plan）
 #   DIFF_ALL=true    扫全部账号目录，不看 diff（首次验证 / 首次全量）
-#   DIFF_ALL=false   手动 pipeline 也走 diff；手动 pipeline 不传 DIFF_ALL 时默认全量
+#   DIFF_ALL=false   手动 pipeline 也走 diff（默认手动 pipeline 走全量）
 #
 # 仓库结构：
 #   .gitlab-ci.yml
@@ -28,27 +28,47 @@
 # （network_mode = "host" + IMDS，SDK 默认链，脚本不手写临时凭证）；
 # NO_PROXY 必须包含 169.254.169.254。
 #
-# 2026-11-13 修复（工单 MR 合并后 CI 报「未改动 account-*/，跳过」/ 手动
-# pipeline 秒失败且无输出的根因）：
-#   a) `DIRS=$(grep ... )` 在 runner 的 `set -e` + pipefail 下，grep 无匹配
-#      = 整条管道返回 1 = 脚本静默退出 1。日志里只剩一行 `set -eu`，看不到
-#      任何报错。现在所有可能无匹配的管道都带 `|| true`，并在赋值前先打印。
-#   b) `[ "$RUN_MODE" = "plan" ] && { ...; }` 这类 AND-list 写法在部分 shell
-#      下的行为不可移植，统一改成 if（防御性，实测 busybox ash/bash 不触发）。
+# 2026-11-13 修复（job 在 `set -eu` 那一行之后秒失败、exit code 1、日志零输出）：
+#   a) 根因：GitLab Runner 的 bash shell 默认带 `set -o pipefail`。旧脚本里
+#        DIRS=$(grep "^$TF_ROOT/account-" changed-files.txt | cut -d/ -f2 | sort -u)
+#      在本次没有 account 改动时 grep 无匹配 → 整条管道返回 1 → `set -e`
+#      立刻静默退出 1，日志里只剩 `$ set -eu # collapsed multi-line command`，
+#      一行报错都没有（本地 bash -eo pipefail 复现：exit=1、零输出）。
+#      现在所有可能“无匹配”的管道都带 `|| true`。
+#   b) 旧脚本在“本次无 account 改动”时 `exit 0` 提前返回，但没写
+#      accounts.txt；紧接着的第二段 `done < accounts.txt` 因文件不存在
+#      再 exit 1。现在跳过时也先落一个空 accounts.txt，第二段判空即退。
 #   c) 先复制 versions.tf 再判断「目录里有没有 .tf」会把空账号目录误判为
-#      非空，plan 出整页 destroy。现在先查资源文件（排除 versions.tf）再复制。
-#   d) 合并提交的默认消息不一定带 MR 标题（Baseline-Publications trailer 和
+#      非空，拿满 state 跑 plan = 整页 destroy。现在先查资源文件（排除
+#      versions.tf）再复制。
+#   d) `terraform plan | tee` 要靠 pipefail 才拿得到退出码 2；老 ash 不支持
+#      pipefail 时管道状态取 tee 的 0，plan 失败也被当成「无差异」。现在用
+#      状态文件取真实退出码。
+#   e) 合并提交的默认消息不一定带 MR 标题（Baseline-Publications trailer 和
 #      IAM-xxxx 工单号都在标题里）。现在 commit message 取不到时，回查该
 #      commit 关联的 MR 标题。
-#   e) apply-result 接口的 RBAC 当前要求 platform_admin（见上），旧注释
-#      「不要用 platform_admin token」与实现相反，已更正。
-#   f) 工单号归一化为大写：平台库里工单号是大写 hex，而 GitLab merge commit
-#      的首行 `Merge branch '.../iam-xxx'` 带小写工单号且排在 MR 标题前面，
-#      -oiE 会先匹配到它 → 平台精确查库 404（2026-11-13 实锤）。匹配结果
-#      统一 tr 成大写。
+#   f) apply-result 的 RBAC 是 platform_admin（见上），旧注释「不要用
+#      platform_admin token」与代码相反，已更正。
+#   g) 回调 404 查不动：旧版 wget 只吐一行 `404 Not Found`，body 全丢，无法
+#      区分「路由不存在」和「工单不存在」。现在统一走 http_call，打印
+#      `METHOD url -> HTTP <code>` + body 片段，并按 body 给结论；再加一道
+#      预检 GET /api/v1/auth/config（公开路由，不过鉴权中间件），PLATFORM_URL
+#      指错时先停手，不再制造两条假失败。PLATFORM_URL 统一去尾斜杠
+#      （`//api/v1` 会被 Gin 判 404）。工单号正则卡 16 位边界，避免更长的号
+#      被截成前 16 位、拿一个不存在的号去回调。
+#   h) 实测最常见的一种 404：PLATFORM_URL 末尾多写一个 `/` → 拼出
+#      `//api/v1/...` → Gin 路由树匹配不到（v1.12.0 实测**不会**做
+#      fixed-path 重定向，直接 404），NoRoute 里
+#      前缀判断（`HasPrefix("//api/v1", "/api/")`）为 false，于是落到通用
+#      分支回 **42 字节** 的 {"code":"NOT_FOUND","message":"not found"}。
+#      这个 body 既不是"路由不存在"也不是"工单不存在"，最容易误判。现在
+#      末尾带 / 会打印警告并自动去掉。
+#   i) 工单号转大写必须用 `tr '[:lower:]' '[:upper:]'`。`grep -i` 匹配到的是
+#      `iam-6bd...`（分支名里的小写），只转 a-f 会得到 `iAm-6BD...`——平台
+#      仍然查不到。平台侧虽然也做了归一化，CI 侧不该依赖它。
 #
-# 说明：平台本身会轮询 commit 的 pipeline 状态，所以 apply-result 回调是
-# “快路径”，不是唯一路径；回调失败不会让工单永远挂着。
+# 说明：平台本身会轮询 commit 的 pipeline 状态，
+# 所以 apply-result 回调是“快路径”，不是唯一路径；回调失败不会让工单永远挂着。
 
 stages: [verify, deploy]
 
@@ -70,14 +90,11 @@ variables:
 .terraform-loop:
   script:
     # ① 确定本次要处理的账号目录
-    # 红线：块内所有 $(管道) 一律以 || true 收尾——若全局开了 pipefail，
-    # grep/ls 无匹配（退出码 1 且无 stderr）会让 set -e 静默杀掉整个 job
-    #（日志表现为 set -eu 折叠块后零输出直接 after_script，2026-11-13 实锤）。
     # 注意：整段无续行符、无嵌套参数展开——GitLab web IDE 粘贴时若混入 CRLF
     # 或漏行，job 会在第一秒失败且报错折叠在本段里，展开首行即可定位。
     - |
       set -eu
-      echo "[1/3] 计算本次涉及的 account 目录 (source=${CI_PIPELINE_SOURCE:-?} DIFF_ALL=${DIFF_ALL:-})"
+      echo "[1/3] 计算本次涉及的 account 目录"
       # 手动 Run pipeline 默认全量：否则 HEAD^ 往往没有 account 改动，看起来像“什么都没干”
       if [ "${DIFF_ALL:-}" = "" ] && [ "$CI_PIPELINE_SOURCE" = "web" ]; then
         DIFF_ALL=true
@@ -85,7 +102,6 @@ variables:
       fi
       if [ "${DIFF_ALL:-false}" = "true" ]; then
         DIRS=$(cd "$TF_ROOT" && ls -d account-*/ 2>/dev/null | sed 's:/$::' | sort || true)
-        [ -n "$DIRS" ] || { echo "✗ DIFF_ALL=true 但 $TF_ROOT/ 下没有 account-*/ 目录"; exit 1; }
       else
         BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}"
         if [ -z "$BASE" ]; then BASE="${CI_COMMIT_BEFORE_SHA:-}"; fi
@@ -172,6 +188,144 @@ variables:
         terraform -chdir="$d" apply -auto-approve -input=false -lock-timeout=5m tfplan
       done < "$CI_PROJECT_DIR/accounts.txt"
 
+# 回调用的公共函数。script 与 after_script 各 !reference 一次——after_script
+# 是独立 shell，不继承 script 里定义过的函数。
+.callback-lib:
+  script:
+    - |
+      # 统一 HTTP 调用：打印 "METHOD url -> HTTP <code>" + body 片段，仅 2xx 返回 0。
+      # 平台侧 404 有两种，body 完全不同，不打 body 就只能靠猜：
+      #   {"code":"NOT_FOUND","message":"API endpoint not found"}  → 路由不存在
+      #     （PLATFORM_URL 前缀错 / 平台版本早于 apply-result 路由）
+      #   {"code":"...","message":"IAM ticket not found"}          → 工单不存在
+      #     （按工单号查库查不到）
+      HTTP_CODE="000"
+      HTTP_BODY=""
+      http_call() {
+        method="$1"; url="$2"; data="${3:-}"; hdr="${4:-}"
+        out="${CI_PROJECT_DIR:-$PWD}/.http-body"; err="${CI_PROJECT_DIR:-$PWD}/.http-err"
+        rm -f "$out" "$err"
+        code=""
+        if command -v curl >/dev/null 2>&1; then
+          set -- -sS --max-time 20 -o "$out" -w '%{http_code}'
+          if [ -n "$hdr" ]; then set -- "$@" -H "$hdr"; fi
+          if [ "$method" = "POST" ]; then
+            set -- "$@" -H "Content-Type: application/json" -d "$data" -X POST
+          fi
+          code=$(curl "$@" "$url" 2>"$err" || true)
+        else
+          # terraform 官方镜像里没有 curl，只有 busybox wget：状态码只能从
+          # -S 打到 stderr 的响应头里取（wget 对 4xx/5xx 退出码是 8）。
+          set -- -S -O "$out" --timeout=20
+          if [ -n "$hdr" ]; then set -- "$@" --header="$hdr"; fi
+          if [ "$method" = "POST" ]; then
+            set -- "$@" --header="Content-Type: application/json" --post-data="$data"
+          fi
+          wget "$@" "$url" 2>"$err" || true
+          code=$(sed -n 's/.*HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' "$err" 2>/dev/null | tail -1)
+        fi
+        HTTP_CODE="${code:-000}"
+        HTTP_BODY=$(cat "$out" 2>/dev/null || true)
+        echo "$method $url -> HTTP $HTTP_CODE"
+        if [ -n "$HTTP_BODY" ]; then
+          echo "  body: $(printf '%s' "$HTTP_BODY" | tr -d '\r' | tr '\n' ' ' | cut -c1-400)"
+        fi
+        case "$HTTP_CODE" in 2*) return 0 ;; esac
+        if [ -s "$err" ] && [ "${HTTP_QUIET:-0}" = "0" ]; then
+          echo "  stderr: $(tr -d '\r' < "$err" | tr '\n' ' ' | cut -c1-300)"
+        fi
+        return 1
+      }
+
+      # 工单号 / 基线 trailer 一律先取 commit message（平台把 MR 标题写进
+      # merge commit）。取不到再回查 MR 标题——CI_JOB_TOKEN 对
+      # /repository/commits/:sha/merge_requests 常常直接 404，这一步是尽力而为。
+      resolve_ids() {
+        # 工单号固定 IAM- + 16 位 hex（平台生成规则）。用
+        # `([^0-9A-F]|$)` 卡边界：只写 {16} 的话，17 位的号会被截成前 16 位，
+        # 拿一个不存在的工单号去回调，只会换来一个更难查的 404。
+        TICKET=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oiE 'IAM-[0-9A-F]{16}([^0-9A-F]|$)' | head -1 | cut -c1-20 | tr '[:lower:]' '[:upper:]' || true)
+        BPIDS=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oE 'Baseline-Publications: [0-9,]+' | head -1 | cut -d' ' -f2 || true)
+        if { [ -z "$TICKET" ] || [ -z "$BPIDS" ]; } && [ -n "${CI_API_V4_URL:-}" ] && [ -n "${CI_PROJECT_ID:-}" ]; then
+          echo "commit message 里缺 id，回查 MR 标题（CI_JOB_TOKEN 被拒时 404 属预期）"
+          # 这一步是尽力而为：CI_JOB_TOKEN 默认读不到 commit→MR 关联，404 很常见，
+          # 也不影响后面回调。所以只留一行状态码，不打 wget 的 stderr，免得整段
+          # 红字看起来像失败。
+          HTTP_QUIET=1
+          if http_call GET "$CI_API_V4_URL/projects/$CI_PROJECT_ID/repository/commits/$CI_COMMIT_SHA/merge_requests" "" "JOB-TOKEN: $CI_JOB_TOKEN"; then
+            if [ -z "$TICKET" ]; then
+              TICKET=$(printf '%s' "$HTTP_BODY" | grep -oiE 'IAM-[0-9A-F]{16}([^0-9A-F]|$)' | head -1 | cut -c1-20 | tr '[:lower:]' '[:upper:]' || true)
+            fi
+            if [ -z "$BPIDS" ]; then
+              BPIDS=$(printf '%s' "$HTTP_BODY" | grep -oE 'Baseline-Publications: [0-9,]+' | head -1 | cut -d' ' -f2 || true)
+            fi
+          else
+            echo "  ↑ GitLab 侧拒绝（CI_JOB_TOKEN 读不到该 commit 的 MR），忽略，不影响回调"
+          fi
+          HTTP_QUIET=0
+        fi
+        echo "工单: [$TICKET]  基线发布: [$BPIDS]"
+      }
+
+      # PLATFORM_URL 末尾的 / 会拼出 //api/v1/...：Gin 的路由树匹配不到，
+      # NoRoute 里的前缀判断（`strings.HasPrefix("//api/v1", "/api/")`）为 false，
+      # 于是落到通用分支，回 42 字节的 {"code":"NOT_FOUND","message":"not found"}
+      # ——这是最难猜的一种 404（既不是"路由不存在"也不是"工单不存在"）。
+      normalize_platform_url() {
+        case "$PLATFORM_URL" in
+          */) echo "⚠ PLATFORM_URL 末尾带 /，已自动去掉（否则拼出 //api/v1/... → 42 字节 not found）" ;;
+        esac
+        # 循环剥：写成 // 也一并清掉；"http://" 这种不完整值不再剥。
+        while [ "${PLATFORM_URL%/}" != "$PLATFORM_URL" ]; do
+          case "${PLATFORM_URL%/}" in
+            *://|*:) break ;;
+          esac
+          PLATFORM_URL="${PLATFORM_URL%/}"
+        done
+      }
+
+      # 预检：/api/v1/auth/config 是公开路由（不过鉴权中间件）。
+      # 它 404 就说明 PLATFORM_URL 根本不是平台 API 根，后面两个回调必然是
+      # 同样的 404——先停手，别把两条假失败留在日志里。
+      preflight() {
+        echo "== 预检 PLATFORM_URL = $PLATFORM_URL =="
+        if http_call GET "$PLATFORM_URL/api/v1/auth/config" "" ""; then
+          echo "✓ 平台可达，API 前缀正确"
+          return 0
+        fi
+        case "$HTTP_BODY" in
+          *'"message":"not found"'*)
+            echo "✗ 路径没有以 /api/ 开头（典型：拼出了 //api/v1/...）。PLATFORM_URL 只写"
+            echo "  根地址，例如 http://127.0.0.1:18080，不要带尾斜杠或路径前缀。"
+            ;;
+          *"API endpoint not found"*)
+            echo "✗ 该地址没有 /api/v1 路由：PLATFORM_URL 指到了 SPA/nginx 根或带"
+            echo "  路径前缀的地址，或平台版本早于 apply-result 路由。"
+            ;;
+          *)
+            echo "✗ 预检失败（HTTP $HTTP_CODE）。PLATFORM_URL 应为平台根地址，"
+            echo "  例如 http://127.0.0.1:18080（不带 /api/v1，不带尾斜杠）。"
+            ;;
+        esac
+        echo "  预检不过，跳过回调（平台轮询仍会兜底）"
+        return 1
+      }
+
+      # 回调失败时按 body 给一句能直接动手的结论，而不是只有一行 404。
+      explain_failure() {
+        case "$HTTP_BODY" in
+          *"API endpoint not found"*)
+            echo "  → 平台没有这个路由：平台版本早于该回调，或 PLATFORM_URL 前缀不对" ;;
+          *"IAM ticket not found"*)
+            echo "  → 平台里没有这个工单：核对 commit message 里的工单号，以及 CI 调的是不是同一套平台环境" ;;
+          *"bearer token"*|*"token is required"*)
+            echo "  → PLATFORM_TOKEN 无效/已停用（apply-result 需要 platform_admin 角色的平台 token）" ;;
+          *"insufficient"*|*"forbidden"*|*"permission"*)
+            echo "  → token 角色不够（apply-result 是 RequireRoles(\"platform_admin\")）" ;;
+          *) echo "  → 见上面的 body" ;;
+        esac
+      }
+
 .terraform-base:
   image:
     name: hashicorp/terraform:1.13
@@ -201,6 +355,7 @@ iam-apply:
     - if: '$CI_PIPELINE_SOURCE == "web"'
   script:
     - !reference [.terraform-loop, script]
+    - !reference [.callback-lib, script]
     - |
       set -eu
       if [ "$CI_PIPELINE_SOURCE" = "push" ]; then RUN_MODE="${MODE:-apply}"; else RUN_MODE="${MODE:-plan}"; fi
@@ -211,67 +366,35 @@ iam-apply:
       fi
       [ -n "${PLATFORM_URL:-}" ] || { echo "⚠ PLATFORM_URL 未设置，跳过回调"; exit 0; }
       [ -n "${PLATFORM_TOKEN:-}" ] || { echo "⚠ PLATFORM_TOKEN 未设置，跳过回调"; exit 0; }
+      normalize_platform_url   # 去掉末尾 /，否则拼出 //api/v1/... → 42 字节 not found
 
-      notify() {
-        url="$1"; body="$2"
-        if command -v curl >/dev/null 2>&1; then
-          curl -sfS --max-time 20 -X POST "$url" \
-            -H "Authorization: Bearer $PLATFORM_TOKEN" \
-            -H "Content-Type: application/json" -d "$body"
-        else
-          wget -q -O- --timeout=20 \
-            --header="Authorization: Bearer $PLATFORM_TOKEN" \
-            --header="Content-Type: application/json" \
-            --post-data="$body" "$url"
-        fi
-      }
-
-      # 合并提交的默认消息不一定带 MR 标题（trailer 与工单号都在标题里），
-      # commit message 取不到时回查该 commit 关联的 MR 标题。
-      # 工单号库里是大写 hex；merge commit 的分支名里是小写，且常排在标题
-      # 前面（`Merge branch '.../iam-xxx' ...`），所以 -oiE 之后必须统一
-      # 转大写，否则平台按工单号精确查库 404（2026-11-13 实锤）。
-      TICKET=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oiE 'IAM-[0-9A-F]{16}' | head -1 | tr '[:lower:]' '[:upper:]' || true)
-      BPIDS=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oE 'Baseline-Publications: [0-9,]+' | head -1 | cut -d' ' -f2 || true)
-      if { [ -z "$TICKET" ] || [ -z "$BPIDS" ]; } && [ -n "${CI_API_V4_URL:-}" ] && [ -n "${CI_PROJECT_ID:-}" ]; then
-        MRS=""
-        if command -v curl >/dev/null 2>&1; then
-          MRS=$(curl -sfS --max-time 20 --header "JOB-TOKEN: $CI_JOB_TOKEN" \
-            "$CI_API_V4_URL/projects/$CI_PROJECT_ID/repository/commits/$CI_COMMIT_SHA/merge_requests" || true)
-        else
-          MRS=$(wget -q -O- --timeout=20 --header="JOB-TOKEN: $CI_JOB_TOKEN" \
-            "$CI_API_V4_URL/projects/$CI_PROJECT_ID/repository/commits/$CI_COMMIT_SHA/merge_requests" || true)
-        fi
-        if [ -z "$TICKET" ]; then
-          TICKET=$(printf '%s' "$MRS" | grep -oiE 'IAM-[0-9A-F]{16}' | head -1 | tr '[:lower:]' '[:upper:]' || true)
-        fi
-        if [ -z "$BPIDS" ]; then
-          BPIDS=$(printf '%s' "$MRS" | grep -oE 'Baseline-Publications: [0-9,]+' | head -1 | cut -d' ' -f2 || true)
-        fi
-      fi
-      echo "工单: [$TICKET]  基线发布: [$BPIDS]"
+      resolve_ids
       if [ -z "$TICKET" ] && [ -z "$BPIDS" ]; then
         echo "commit/MR 里没有工单号或基线 trailer，跳过回调（平台轮询仍会兜底）"
         exit 0
       fi
+      if ! preflight; then exit 0; fi
 
       BODY="{\"status\":\"succeeded\",\"commit_sha\":\"$CI_COMMIT_SHA\",\"ci_url\":\"$CI_JOB_URL\"}"
       for bp in $(printf '%s' "$BPIDS" | tr ',' ' '); do
         [ -n "$bp" ] || continue
-        if notify "$PLATFORM_URL/api/v1/aws/baseline-publications/$bp/apply-result" "$BODY"; then
-          echo "✓ 基线 $bp 回调成功"
+        if http_call POST "$PLATFORM_URL/api/v1/aws/baseline-publications/$bp/apply-result" "$BODY" "Authorization: Bearer $PLATFORM_TOKEN"; then
+          echo "✓ 基线 $bp 已标记应用"
         else
+          explain_failure
           echo "⚠ 基线 $bp 回调失败（平台轮询仍会兜底）"
         fi
       done
       if [ -n "$TICKET" ]; then
-        if notify "$PLATFORM_URL/api/v1/tickets/$TICKET/apply-result" "$BODY"; then
-          echo "✓ 工单 $TICKET 回调成功"
+        if http_call POST "$PLATFORM_URL/api/v1/tickets/$TICKET/apply-result" "$BODY" "Authorization: Bearer $PLATFORM_TOKEN"; then
+          echo "✓ 工单 $TICKET 已关单"
         else
+          explain_failure
           echo "⚠ 工单 $TICKET 回调失败（平台轮询仍会兜底）"
         fi
       fi
   after_script:
+    - !reference [.callback-lib, script]
     - |
       # 失败兜底：apply 失败/取消也把 failed 状态回传（幂等）
       set +e
@@ -283,46 +406,16 @@ iam-apply:
       [ "$RUN_MODE" = "apply" ] || exit 0
       [ -n "${PLATFORM_URL:-}" ] || exit 0
       [ -n "${PLATFORM_TOKEN:-}" ] || exit 0
+      normalize_platform_url
 
-      notify() {
-        url="$1"; body="$2"
-        if command -v curl >/dev/null 2>&1; then
-          curl -sfS --max-time 20 -X POST "$url" \
-            -H "Authorization: Bearer $PLATFORM_TOKEN" \
-            -H "Content-Type: application/json" -d "$body"
-        else
-          wget -q -O- --timeout=20 \
-            --header="Authorization: Bearer $PLATFORM_TOKEN" \
-            --header="Content-Type: application/json" \
-            --post-data="$body" "$url"
-        fi
-      }
-
-      TICKET=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oiE 'IAM-[0-9A-F]{16}' | head -1 | tr '[:lower:]' '[:upper:]' || true)
-      BPIDS=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oE 'Baseline-Publications: [0-9,]+' | head -1 | cut -d' ' -f2 || true)
-      if { [ -z "$TICKET" ] || [ -z "$BPIDS" ]; } && [ -n "${CI_API_V4_URL:-}" ] && [ -n "${CI_PROJECT_ID:-}" ]; then
-        MRS=""
-        if command -v curl >/dev/null 2>&1; then
-          MRS=$(curl -sfS --max-time 20 --header "JOB-TOKEN: $CI_JOB_TOKEN" \
-            "$CI_API_V4_URL/projects/$CI_PROJECT_ID/repository/commits/$CI_COMMIT_SHA/merge_requests" || true)
-        else
-          MRS=$(wget -q -O- --timeout=20 --header="JOB-TOKEN: $CI_JOB_TOKEN" \
-            "$CI_API_V4_URL/projects/$CI_PROJECT_ID/repository/commits/$CI_COMMIT_SHA/merge_requests" || true)
-        fi
-        if [ -z "$TICKET" ]; then
-          TICKET=$(printf '%s' "$MRS" | grep -oiE 'IAM-[0-9A-F]{16}' | head -1 | tr '[:lower:]' '[:upper:]' || true)
-        fi
-        if [ -z "$BPIDS" ]; then
-          BPIDS=$(printf '%s' "$MRS" | grep -oE 'Baseline-Publications: [0-9,]+' | head -1 | cut -d' ' -f2 || true)
-        fi
-      fi
+      resolve_ids
       BODY="{\"status\":\"failed\",\"commit_sha\":\"$CI_COMMIT_SHA\",\"ci_url\":\"$CI_JOB_URL\"}"
       for bp in $(printf '%s' "$BPIDS" | tr ',' ' '); do
         [ -n "$bp" ] || continue
-        notify "$PLATFORM_URL/api/v1/aws/baseline-publications/$bp/apply-result" "$BODY" \
-          || echo "⚠ 基线 $bp failed 回调失败"
+        http_call POST "$PLATFORM_URL/api/v1/aws/baseline-publications/$bp/apply-result" "$BODY" "Authorization: Bearer $PLATFORM_TOKEN" \
+          || echo "⚠ 基线 $bp failed 回调失败（HTTP $HTTP_CODE）"
       done
       if [ -n "$TICKET" ]; then
-        notify "$PLATFORM_URL/api/v1/tickets/$TICKET/apply-result" "$BODY" \
-          || echo "⚠ 工单 $TICKET failed 回调失败"
+        http_call POST "$PLATFORM_URL/api/v1/tickets/$TICKET/apply-result" "$BODY" "Authorization: Bearer $PLATFORM_TOKEN" \
+          || echo "⚠ 工单 $TICKET failed 回调失败（HTTP $HTTP_CODE）"
       fi

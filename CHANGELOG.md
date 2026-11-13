@@ -22,6 +22,11 @@ semantic versioning.
   pathspec (`-- "iam/account-*/"`) can silently match nothing. The fix falls
   back to the merge commit's first parent, drops the glob pathspec, and logs
   the diff base and raw changed-file list so empty runs are diagnosable.
+  The callback layer now prints `METHOD url -> HTTP <code>` with a body
+  excerpt and an actionable conclusion, preflights `PLATFORM_URL` against the
+  public `/api/v1/auth/config` route, strips a trailing slash (it builds
+  `//api/v1/...`, which Gin answers with an opaque 42-byte not-found), and
+  normalises the ticket number to uppercase before calling back.
 
 ### Fixed
 
