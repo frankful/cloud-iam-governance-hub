@@ -11,6 +11,17 @@ semantic versioning.
 - Minimal CI workflow (go build/test, frontend tsc + build, gitleaks secret
   scan) so external PRs get a gate and fixture regressions cannot silently
   re-enter the tree.
+- Reference GitLab pipeline at `docs/examples/gitlab-ci.example.yml` (archived
+  from a real deployment): per-account `init/plan/apply` with S3 state, a
+  merge-commit-aware changed-directory computation, the
+  `Baseline-Publications` apply-result callback and the import+destroy
+  address-drift sentinel. The initial archive commit keeps the pre-fix
+  version for history; the follow-up commit fixes "merged MR reports no
+  changes": `git diff-tree`/`git show` return empty on merge commits, web
+  pipelines have a zero `CI_COMMIT_BEFORE_SHA`, and a trailing-slash glob
+  pathspec (`-- "iam/account-*/"`) can silently match nothing. The fix falls
+  back to the merge commit's first parent, drops the glob pathspec, and logs
+  the diff base and raw changed-file list so empty runs are diagnosable.
 
 ### Fixed
 

@@ -1,9 +1,5 @@
 # .gitlab-ci.yml — GitLab CI 接线示例（cloud-iam-governance-hub）
 #
-# 本文件是实际部署在 GitLab 基线仓库的 .gitlab-ci.yml 存档（2026-11-12 版，
-# 首次走通 GitLab 全流程的版本）。下一版提交包含 2026-11-13 的
-# 「merge commit diff 无变更」修复与基线回调/import 哨兵，生产请用最新版。
-#
 # 放在基线仓库根目录（与 TF_ROOT 指向的目录同级）。平台负责发布分支/MR，
 # 这个 pipeline 负责逐账号 terraform init/plan/apply。
 #
@@ -20,6 +16,21 @@
 #   .gitlab-ci.yml
 #   iam/                      <- TF_ROOT（平台 MR 只改 iam/account-<id>/ 下的文件）
 #     versions.tf             <- 必须存在：backend "s3" {} 空块，缺了账号目录复制失败
+#     account-<aws账号id>/...tf
+#
+# runner：docker executor；容器内拿 AWS 凭证走宿主机 instance profile
+# （network_mode = "host" + IMDS，SDK 默认链，脚本不手写临时凭证）；
+# NO_PROXY 必须包含 169.254.169.254。
+#
+# 2026-11-13 修复（工单 MR 合并后 CI 报「未改动 account-*/，跳过」的根因）：
+#   a) 对 merge commit 用 `git diff-tree` / `git show`（combined diff）取文件
+#      列表返回空；
+#   b) web 手动 pipeline 的 CI_COMMIT_BEFORE_SHA 为全 0；
+#   c) pathspec `-- "$TF_ROOT/account-*/"` 带尾斜杠的 glob 在部分场景匹配不到
+#      文件而静默返回空。
+#   现在：base 优先取 MR diff base / CI_COMMIT_BEFORE_SHA，缺失、全 0 或不在
+#   这份克隆里时回退 merge commit 的第一父提交；diff 不再带 glob pathspec，
+#   并把 base 与原始变更文件列表打出来——再空转一眼可定位。
 
 stages: [verify, deploy]
 
@@ -35,28 +46,35 @@ variables:
   TF_ROOT: "iam"
   STATE_KEY_PREFIX: "iam-governance-hub"
   TF_IN_AUTOMATION: "1"
-  GIT_DEPTH: "0"
-  # MODE / DIFF_ALL 都是可选手动变量:
-  #   MODE=apply        → 手动跑时真正 apply（默认手动只 plan）
-  #   DIFF_ALL=true     → 扫全部账号目录，不看 diff（首次验证 / 首次全量）
+  GIT_DEPTH: "0"          # 全量历史全分支，diff 才拿得到 base commit
 
 # 只有循环: 确定账号范围 → 逐账号 init/plan/apply
 .terraform-loop:
   script:
-    # ① 确定本次要处理的账号目录
+    # ① 确定本次要处理的账号目录（2026-11-13 修复版，见文件头注释）
     - |
       set -eu
       if [ "${DIFF_ALL:-false}" = "true" ]; then
         # 首次验证 / 首次全量: 扫全部账号目录, 不看 diff
         DIRS=$(cd "$TF_ROOT" && ls -d account-*/ 2>/dev/null | sed 's:/$::' | sort)
       else
-        BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-$CI_COMMIT_BEFORE_SHA}"
-        case "$BASE" in
-          ""|"0000000000000000000000000000000000000000") RANGE="$CI_COMMIT_SHA^..$CI_COMMIT_SHA" ;;
-          *) RANGE="$BASE..$CI_COMMIT_SHA" ;;
-        esac
-        DIRS=$(git diff --name-only "$RANGE" -- "$TF_ROOT/account-*/" | cut -d/ -f2 | sort -u)
+        BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-${CI_COMMIT_BEFORE_SHA:-}}"
+        if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+           || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+          BASE="$(git rev-parse "$CI_COMMIT_SHA^" 2>/dev/null || true)"   # merge commit: 第一父提交
+        fi
+        if [ -n "$BASE" ]; then
+          # 不用带尾斜杠的 glob pathspec；全量 diff 落文件，改动清单可观察
+          git diff --name-only "$BASE..$CI_COMMIT_SHA" -- "$TF_ROOT/" \
+            > "$CI_PROJECT_DIR/changed-files.txt" || true
+          DIRS=$(grep "^$TF_ROOT/account-" "$CI_PROJECT_DIR/changed-files.txt" \
+                 | cut -d/ -f2 | sort -u)
+        else
+          DIRS=""
+        fi
+        echo "diff base=$BASE"
       fi
+      echo "本次执行收敛的 account-*/ 路径: [$DIRS]"
       if [ -z "$DIRS" ]; then echo "本次提交未改动 $TF_ROOT/account-*/, 跳过"; exit 0; fi
       printf '待处理: %s\n' $DIRS
       echo "$DIRS" > "$CI_PROJECT_DIR/accounts.txt"
@@ -64,6 +82,7 @@ variables:
     # ② 逐账号 init / plan / apply
     - |
       set -eu
+      set -o pipefail   # plan 输出经 tee 落盘，失败码必须穿透管道
       if [ "$CI_PIPELINE_SOURCE" = "push" ]; then RUN_MODE="${MODE:-apply}"; else RUN_MODE="${MODE:-plan}"; fi
       echo "运行模式: $RUN_MODE"
       while read -r a; do
@@ -72,7 +91,8 @@ variables:
         [ -f "$d/versions.tf" ] || cp -f "$TF_ROOT/versions.tf" "$d/"
         set -- "$d"/*.tf
         if [ "$1" = "$d/*.tf" ]; then
-          echo "✗ $d 下没有 .tf，检查目录与 GITLAB_TERRAFORM_PATH 是否一致"; exit 1
+          # 空目录拿着满 state 跑 plan = 整页 destroy，宁可失败
+          echo "✗ $d 下没有 .tf，检查目录与 TF_ROOT 是否一致"; exit 1
         fi
         echo "=== $a ==="
         terraform -chdir="$d" init -input=false -reconfigure \
@@ -81,22 +101,32 @@ variables:
           -backend-config="region=$STATE_REGION" \
           -backend-config="use_lockfile=true"
         CODE=0
-        terraform -chdir="$d" plan -input=false -out=tfplan -detailed-exitcode || CODE=$?
+        terraform -chdir="$d" plan -input=false -out=tfplan -detailed-exitcode 2>&1 \
+          | tee "$CI_PROJECT_DIR/plan.out" || CODE=$?
         case "$CODE" in
           0) echo "$a: 无差异" ;;
           2) echo "$a: 有变更" ;;
           *) echo "✗ $a: plan 失败"; exit 1 ;;
         esac
         if [ "$RUN_MODE" = "plan" ]; then echo "$a: plan 模式，跳过 apply"; continue; fi
+        # import 哨兵（2026-11-13 新增）：同一 plan 同时出现 import 与 destroy =
+        # 疑似地址漂移（label 变化 → 旧地址 orphan 要销毁、同一对象又被 import
+        # 到新地址）。中止 apply 防止双写 state；先 terraform state list / state
+        # show 核对，再用 moved 块或手工收敛。
+        if grep -q ' to import' "$CI_PROJECT_DIR/plan.out" \
+           && grep -qE ' [1-9][0-9]* to destroy' "$CI_PROJECT_DIR/plan.out"; then
+          echo "✗ 同一 plan 同时出现 import 与 destroy，疑似地址漂移，中止 apply"
+          exit 1
+        fi
         terraform -chdir="$d" apply -auto-approve -input=false tfplan
       done < "$CI_PROJECT_DIR/accounts.txt"
 
 .terraform-base:
   image:
     name: hashicorp/terraform:1.13
-    entrypoint: [""]
+    entrypoint: [""]            # 覆盖镜像默认 entrypoint，否则 script 被当成 terraform 子命令
   tags: [iam-ci]
-  resource_group: iam-tfstate
+  resource_group: iam-tfstate   # 串行，防两个 pipeline 抢 state 锁
   timeout: 2h
   before_script:
     - ': "${STATE_BUCKET:?缺少 CI/CD 变量 STATE_BUCKET}"'
@@ -104,14 +134,14 @@ variables:
   script:
     - !reference [.terraform-loop, script]
 
-# MR pipeline: 只 plan, 无回调代码
+# MR pipeline: 只 plan, 无回调
 iam-plan:
   extends: .terraform-base
   stage: verify
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
 
-# main 合并自动 apply; 手动 Run pipeline 默认只 plan
+# main 合并自动 apply; 手动 Run pipeline 默认只 plan（MODE=apply 才真正 apply）
 iam-apply:
   extends: .terraform-base
   stage: deploy
@@ -121,11 +151,28 @@ iam-apply:
   script:
     - !reference [.terraform-loop, script]
     - |
+      # ③ 回调（2026-11-13 版）：基线发布 + 工单两类，逐 id 幂等
       set -eu
       if [ "$CI_PIPELINE_SOURCE" = "push" ]; then RUN_MODE="${MODE:-apply}"; else RUN_MODE="${MODE:-plan}"; fi
       [ "$RUN_MODE" = "plan" ] && { echo "plan 模式，不回调"; exit 0; }
+
+      # 基线发布回调：基线 MR 标题带 trailer `— Baseline-Publications: <id>[,<id>…]`
+      BPIDS=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oE 'Baseline-Publications: [0-9,]+' | head -1 | cut -d' ' -f2 || true)
+      for bp in $(echo "$BPIDS" | tr ',' ' '); do
+        [ -n "$bp" ] || continue
+        BODY="{\"status\":\"succeeded\",\"commit_sha\":\"$CI_COMMIT_SHA\",\"ci_url\":\"$CI_JOB_URL\"}"
+        command -v curl >/dev/null 2>&1 \
+          && curl -sf -X POST "$PLATFORM_URL/api/v1/aws/baseline-publications/$bp/apply-result" \
+             -H "Authorization: Bearer $PLATFORM_TOKEN" -H "Content-Type: application/json" -d "$BODY" \
+          || wget -q -O- --header="Authorization: Bearer $PLATFORM_TOKEN" \
+               --header="Content-Type: application/json" --post-data="$BODY" \
+               "$PLATFORM_URL/api/v1/aws/baseline-publications/$bp/apply-result" \
+          || echo "⚠ 基线 $bp 回调失败，需人工在平台标记"
+      done
+
+      # 工单回调：commit（MR 标题）里带工单号 IAM-XXXXXXXXXXXXXXXX
       TICKET=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oE 'IAM-[0-9A-F]{16}' | head -1 || true)
-      if [ -z "$TICKET" ]; then echo "无工单号（基线人工提交），不回调"; exit 0; fi
+      if [ -z "$TICKET" ]; then echo "无工单号（纯基线提交），基线回调已完成"; exit 0; fi
       BODY="{\"status\":\"succeeded\",\"commit_sha\":\"$CI_COMMIT_SHA\",\"ci_url\":\"$CI_JOB_URL\"}"
       command -v curl >/dev/null 2>&1 \
         && curl -sf -X POST "$PLATFORM_URL/api/v1/tickets/$TICKET/apply-result" \
@@ -136,15 +183,28 @@ iam-apply:
         || echo "⚠ 回调失败，工单 $TICKET 需人工关单"
   after_script:
     - |
+      # 失败兜底：apply 失败/取消也把 failed 状态回传（幂等）
       [ "$CI_JOB_STATUS" = "failed" ] || exit 0
       if [ "$CI_PIPELINE_SOURCE" = "push" ]; then RUN_MODE="${MODE:-apply}"; else RUN_MODE="${MODE:-plan}"; fi
       [ "$RUN_MODE" = "plan" ] && exit 0
       TICKET=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oE 'IAM-[0-9A-F]{16}' | head -1 || true)
-      [ -n "$TICKET" ] || exit 0
-      BODY="{\"status\":\"failed\",\"commit_sha\":\"$CI_COMMIT_SHA\",\"ci_url\":\"$CI_JOB_URL\"}"
-      command -v curl >/dev/null 2>&1 \
-        && curl -sf -X POST "$PLATFORM_URL/api/v1/tickets/$TICKET/apply-result" \
-           -H "Authorization: Bearer $PLATFORM_TOKEN" -H "Content-Type: application/json" -d "$BODY" \
-        || wget -q -O- --header="Authorization: Bearer $PLATFORM_TOKEN" \
-             --header="Content-Type: application/json" --post-data="$BODY" \
-             "$PLATFORM_URL/api/v1/tickets/$TICKET/apply-result"
+      if [ -n "$TICKET" ]; then
+        BODY="{\"status\":\"failed\",\"commit_sha\":\"$CI_COMMIT_SHA\",\"ci_url\":\"$CI_JOB_URL\"}"
+        command -v curl >/dev/null 2>&1 \
+          && curl -sf -X POST "$PLATFORM_URL/api/v1/tickets/$TICKET/apply-result" \
+             -H "Authorization: Bearer $PLATFORM_TOKEN" -H "Content-Type: application/json" -d "$BODY" \
+          || wget -q -O- --header="Authorization: Bearer $PLATFORM_TOKEN" \
+               --header="Content-Type: application/json" --post-data="$BODY" \
+               "$PLATFORM_URL/api/v1/tickets/$TICKET/apply-result"
+      fi
+      BPIDS=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oE 'Baseline-Publications: [0-9,]+' | head -1 | cut -d' ' -f2 || true)
+      for bp in $(echo "$BPIDS" | tr ',' ' '); do
+        [ -n "$bp" ] || continue
+        BODY="{\"status\":\"failed\",\"commit_sha\":\"$CI_COMMIT_SHA\",\"ci_url\":\"$CI_JOB_URL\"}"
+        command -v curl >/dev/null 2>&1 \
+          && curl -sf -X POST "$PLATFORM_URL/api/v1/aws/baseline-publications/$bp/apply-result" \
+             -H "Authorization: Bearer $PLATFORM_TOKEN" -H "Content-Type: application/json" -d "$BODY" \
+          || wget -q -O- --header="Authorization: Bearer $PLATFORM_TOKEN" \
+               --header="Content-Type: application/json" --post-data="$BODY" \
+               "$PLATFORM_URL/api/v1/aws/baseline-publications/$bp/apply-result"
+      done

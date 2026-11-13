@@ -160,6 +160,10 @@ pipeline does the plan/apply. Two optional callbacks close the loop:
   post-apply `plan -detailed-exitcode` zero-change check reports back; the
   reporting contract is described in `docs/phase4-drift-design.md`.
 
+A complete, deployable GitLab pipeline (per-account plan/apply loop, merge-commit
+aware change detection, baseline-publication callbacks, import-vs-destroy
+sentinel) lives in [`docs/examples/gitlab-ci.example.yml`](docs/examples/gitlab-ci.example.yml).
+
 Without callbacks, merged tickets are closed by merge-detection fallback and
 apply failures are visible only in CI logs.
 
