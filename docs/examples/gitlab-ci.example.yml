@@ -51,13 +51,16 @@ variables:
 # 只有循环: 确定账号范围 → 逐账号 init/plan/apply
 .terraform-loop:
   script:
-    # ① 确定本次要处理的账号目录（2026-11-13 修复版，见文件头注释）
-    # 注意：整段无续行符、无嵌套参数展开——GitLab web IDE 粘贴时若混入 CRLF
-    # 或漏行，job 会在第一秒失败且报错折叠在本段里，展开首行即可定位。
+    # ① 确定本次要处理的账号目录（2026-11-13 修复 v3，见文件头注释）
+    # 红线：块内所有 $(管道) 一律以 || true 收尾。若全局开了 pipefail，
+    # grep/ls 无匹配（退出码 1 且无 stderr）会让 set -e 静默杀掉整个 job
+    # ——日志表现为 set -eu 折叠块后零输出直接 after_script（2026-11-13 实锤）。
     - |
       set -eu
+      echo "① 开始: source=${CI_PIPELINE_SOURCE:-?} DIFF_ALL=${DIFF_ALL:-false}"
       if [ "${DIFF_ALL:-false}" = "true" ]; then
-        DIRS=$(cd "$TF_ROOT" && ls -d account-*/ 2>/dev/null | sed 's:/$::' | sort)
+        DIRS=$(cd "$TF_ROOT" && ls -d account-*/ 2>/dev/null | sed 's:/$::' | sort || true)
+        [ -n "$DIRS" ] || { echo "✗ DIFF_ALL: $TF_ROOT/ 下没有 account-*/ 目录"; exit 1; }
       else
         BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}"
         if [ -z "$BASE" ]; then BASE="${CI_COMMIT_BEFORE_SHA:-}"; fi
@@ -66,10 +69,9 @@ variables:
         if [ -z "$BASE" ]; then BASE="$(git rev-parse "$CI_COMMIT_SHA^" 2>/dev/null || true)"; fi
         if [ -n "$BASE" ]; then
           git diff --name-only "$BASE..$CI_COMMIT_SHA" -- "$TF_ROOT/" > "$CI_PROJECT_DIR/changed-files.txt" || true
-          DIRS=$(grep "^$TF_ROOT/account-" "$CI_PROJECT_DIR/changed-files.txt" | cut -d/ -f2 | sort -u)
-          echo "diff base=$BASE"
-          echo "changed files:"
+          echo "diff base=$BASE, changed files:"
           cat "$CI_PROJECT_DIR/changed-files.txt"
+          DIRS=$(grep "^$TF_ROOT/account-" "$CI_PROJECT_DIR/changed-files.txt" | cut -d/ -f2 | sort -u || true)
         else
           DIRS=""
           echo "diff base=(空: 取不到对比基线, 不做增量)"
