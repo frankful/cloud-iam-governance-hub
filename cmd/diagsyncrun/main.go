@@ -88,7 +88,8 @@ func main() {
 	}
 
 	if len(os.Args) > 1 && os.Args[1] == "-tickets" {
-		fmt.Println("\n=== eks-upgrade-backup-role-policy related tickets ===")
+		needle := envOr("DIAG_POLICY_NAME", "sample-policy")
+		fmt.Printf("\n=== %s related tickets ===\n", needle)
 		tRows, err := db.QueryContext(ctx, `SELECT COALESCE(ticket_no,'-'), COALESCE(ticket_type,'-'),
 			COALESCE(principal_name,'-'), COALESCE(status,'-'),
 			request_policy->>'source_ticket_no' AS src,
@@ -96,8 +97,8 @@ func main() {
 			(terraform_code LIKE '%aws_iam_role_policy" "managed_policy"') AS has_managed,
 			(terraform_code LIKE '%aws_iam_role_policy" "inline_policy"') AS has_inline
 			FROM iam_ticket
-			WHERE terraform_code LIKE '%eks-upgrade-backup-role-policy%'
-			ORDER BY created_at`)
+			WHERE terraform_code LIKE $1
+			ORDER BY created_at`, "%"+needle+"%")
 		if err != nil {
 			fmt.Println("query:", err)
 			return
@@ -114,12 +115,13 @@ func main() {
 			fmt.Printf("%s type=%s principal=%s status=%s src=%s created=%s managed_policy=%v inline_policy=%v\n",
 				tno, ttype, pname, status, nv(src), created, hasManaged, hasInline)
 		}
-		fmt.Println("\n=== ticket IAM-560D7A581A27F9E8 ===")
+		ticketNo := envOr("DIAG_TICKET_NO", "IAM-0123456789ABCDEF")
+		fmt.Printf("\n=== ticket %s ===\n", ticketNo)
 		row := db.QueryRowContext(ctx, `SELECT COALESCE(ticket_no,'-'), COALESCE(ticket_type,'-'),
 			COALESCE(principal_name,'-'), COALESCE(status,'-'),
 			COALESCE(closure_reason,'-'),
 			request_policy->>'source_ticket_no', created_at::text
-			FROM iam_ticket WHERE lower(ticket_no) = 'iam-560d7a581a27f9e8'`)
+			FROM iam_ticket WHERE lower(ticket_no) = $1`, strings.ToLower(ticketNo))
 		var tno, ttype, pname, status, closure, created string
 		var src sql.NullString
 		if err := row.Scan(&tno, &ttype, &pname, &status, &closure, &src, &created); err != nil {
@@ -152,6 +154,13 @@ func main() {
 		fmt.Printf("id=%d acct=%s display=%s enabled=%v status=%s attempt=%s success=%s err=%s\n",
 			id, acct, display, enabled, syncStatus, nv(attempt), nv(success), nv(syncErr))
 	}
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }
 
 func nv(v sql.NullString) string {

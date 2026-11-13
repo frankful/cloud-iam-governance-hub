@@ -59,10 +59,9 @@ semantic versioning.
   `POST /aws/baseline-publications/:id/apply-result` (the GitLab default merge
   commit includes only the MR title, hence the trailer lives there).
 
-- Test fixtures no longer use real production resource naming
-  (`agentic-commerce-prod-*`, `tdfos-prod-group`, `infra-eks1-nodegroup-role`,
-  `Agentic-Commerce`, real ticket numbers); placeholders instead. The publish
-  scanner now rejects these patterns.
+- Test fixtures no longer use production resource naming from the internal
+  environment (real role, policy, group and ticket identifiers); placeholders
+  instead. The publish scanner now rejects these patterns.
 
 ## [0.1.11] — 2026-11-10
 

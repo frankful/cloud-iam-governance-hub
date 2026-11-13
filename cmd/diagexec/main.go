@@ -9,6 +9,13 @@ import (
 	"github.com/joho/godotenv"
 )
 
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
 func main() {
 	godotenv.Load()
 	db, err := sql.Open("pgx", os.Getenv("DATABASE_URL"))
@@ -19,7 +26,8 @@ func main() {
 	defer db.Close()
 	var status, reason, closedBy, merge, ci, apply string
 	var attempts int
-	err = db.QueryRow(`SELECT status, closure_reason, closed_by, git_merge_state, git_ci_state, git_apply_result, poll_attempt_count FROM iam_ticket WHERE ticket_no='IAM-CC81BDF9D0F134C9'`).
+	ticketNo := envOr("DIAG_TICKET_NO", "IAM-0123456789ABCDEF")
+	err = db.QueryRow(`SELECT status, closure_reason, closed_by, git_merge_state, git_ci_state, git_apply_result, poll_attempt_count FROM iam_ticket WHERE ticket_no=$1`, ticketNo).
 		Scan(&status, &reason, &closedBy, &merge, &ci, &apply, &attempts)
 	if err != nil {
 		fmt.Println("query:", err)

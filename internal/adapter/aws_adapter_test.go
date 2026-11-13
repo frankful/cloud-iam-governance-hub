@@ -638,7 +638,7 @@ func TestNormalizePolicyDocument(t *testing.T) {
 
 	t.Run("platform DSL is translated to AWS format", func(t *testing.T) {
 		dsl := json.RawMessage(`{
-			"name": "eks-upgrade-backup-policy",
+			"name": "sample-backup-policy",
 			"statements": [
 				{"effect": "Allow", "actions": ["eks:DescribeCluster"], "resources": ["arn:aws:eks:ap-southeast-1:111122223333:cluster/c"]},
 				{"effect": "Allow", "actions": ["backup:CreateRecoveryPoint"], "resources": ["*"]}
@@ -1047,7 +1047,7 @@ func assertAttributeValue(t *testing.T, text, name, value string) {
 // TestPatchRoleAttributesFindsBlockByRoleName verifies the docs item 15
 // fix: the role block is located by its name attribute, not by resource
 // label — so legacy files (managed_role), operator-renamed labels
-// (managed_role11, the layout currently in the iam-baseline repo) and the new
+// (managed_role11, the Terraform repo layout used by the platform) and the new
 // role_<name> labels all patch cleanly.
 func TestPatchRoleAttributesFindsBlockByRoleName(t *testing.T) {
 	adapter := AWSAdapter{}
@@ -1085,7 +1085,7 @@ resource "aws_iam_role_policy" "role_my-role_policy" {
 // TestRoleResourceLabel verifies the unique role label scheme (docs item 15):
 // prefix + sanitized name, non-name characters collapsed to underscores.
 func TestRoleResourceLabel(t *testing.T) {
-	if got := RoleResourceLabel("eks-upgrade-backup-role"); got != "role_eks-upgrade-backup-role" {
+	if got := RoleResourceLabel("sample-joiner-role"); got != "role_sample-joiner-role" {
 		t.Errorf("RoleResourceLabel(dashed name) = %q", got)
 	}
 	if got := RoleResourceLabel("otel.acm+prd"); got != "role_otel_acm_prd" {

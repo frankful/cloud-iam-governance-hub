@@ -24,7 +24,7 @@ type pollTask struct {
 
 func main() {
 	ticketNo := "IAM-0123456789ABCDEF"
-	project := "example-org/iam-baseline"
+	project := "example-org/iam-infra"
 	prNumber := "1"
 	delay := 0 * time.Second
 	for i, arg := range os.Args[1:] {

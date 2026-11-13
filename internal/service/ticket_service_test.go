@@ -3035,9 +3035,9 @@ func (m *mockPollEnqueuer) EnqueueGitStatusPoll(_ context.Context, payload GitSt
 }
 
 func TestTicketServiceRearmPolling(t *testing.T) {
-	prURL := "https://github.com/example-org/iam-baseline/pull/4"
+	prURL := "https://github.com/example-org/iam-infra/pull/4"
 	provider := "GITHUB"
-	project := "example-org/iam-baseline"
+	project := "example-org/iam-infra"
 	remoteNumber := "4"
 
 	newService := func(repo *memoryTicketRepository, enqueuer GitStatusPollEnqueuer) *TicketService {
@@ -3074,7 +3074,7 @@ func TestTicketServiceRearmPolling(t *testing.T) {
 		}
 		payload := enqueuer.payloads[0]
 		if payload.TicketNo != "IAM-1" || payload.Attempt != 1 ||
-			payload.RemoteRequestNumber != "4" || payload.Project != "example-org/iam-baseline" {
+			payload.RemoteRequestNumber != "4" || payload.Project != "example-org/iam-infra" {
 			t.Errorf("unexpected payload: %+v", payload)
 		}
 	})
