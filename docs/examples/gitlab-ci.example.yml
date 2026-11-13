@@ -40,6 +40,10 @@
 #      commit 关联的 MR 标题。
 #   e) apply-result 接口的 RBAC 当前要求 platform_admin（见上），旧注释
 #      「不要用 platform_admin token」与实现相反，已更正。
+#   f) 工单号归一化为大写：平台库里工单号是大写 hex，而 GitLab merge commit
+#      的首行 `Merge branch '.../iam-xxx'` 带小写工单号且排在 MR 标题前面，
+#      -oiE 会先匹配到它 → 平台精确查库 404（2026-11-13 实锤）。匹配结果
+#      统一 tr 成大写。
 #
 # 说明：平台本身会轮询 commit 的 pipeline 状态，所以 apply-result 回调是
 # “快路径”，不是唯一路径；回调失败不会让工单永远挂着。
@@ -222,7 +226,10 @@ iam-apply:
 
       # 合并提交的默认消息不一定带 MR 标题（trailer 与工单号都在标题里），
       # commit message 取不到时回查该 commit 关联的 MR 标题。
-      TICKET=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oiE 'IAM-[0-9A-F]{16}' | head -1 || true)
+      # 工单号库里是大写 hex；merge commit 的分支名里是小写，且常排在标题
+      # 前面（`Merge branch '.../iam-xxx' ...`），所以 -oiE 之后必须统一
+      # 转大写，否则平台按工单号精确查库 404（2026-11-13 实锤）。
+      TICKET=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oiE 'IAM-[0-9A-F]{16}' | head -1 | tr '[:lower:]' '[:upper:]' || true)
       BPIDS=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oE 'Baseline-Publications: [0-9,]+' | head -1 | cut -d' ' -f2 || true)
       if { [ -z "$TICKET" ] || [ -z "$BPIDS" ]; } && [ -n "${CI_API_V4_URL:-}" ] && [ -n "${CI_PROJECT_ID:-}" ]; then
         MRS=""
@@ -234,7 +241,7 @@ iam-apply:
             "$CI_API_V4_URL/projects/$CI_PROJECT_ID/repository/commits/$CI_COMMIT_SHA/merge_requests" || true)
         fi
         if [ -z "$TICKET" ]; then
-          TICKET=$(printf '%s' "$MRS" | grep -oE 'IAM-[0-9A-F]{16}' | head -1 || true)
+          TICKET=$(printf '%s' "$MRS" | grep -oiE 'IAM-[0-9A-F]{16}' | head -1 | tr '[:lower:]' '[:upper:]' || true)
         fi
         if [ -z "$BPIDS" ]; then
           BPIDS=$(printf '%s' "$MRS" | grep -oE 'Baseline-Publications: [0-9,]+' | head -1 | cut -d' ' -f2 || true)
@@ -289,7 +296,7 @@ iam-apply:
         fi
       }
 
-      TICKET=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oiE 'IAM-[0-9A-F]{16}' | head -1 || true)
+      TICKET=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oiE 'IAM-[0-9A-F]{16}' | head -1 | tr '[:lower:]' '[:upper:]' || true)
       BPIDS=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oE 'Baseline-Publications: [0-9,]+' | head -1 | cut -d' ' -f2 || true)
       if { [ -z "$TICKET" ] || [ -z "$BPIDS" ]; } && [ -n "${CI_API_V4_URL:-}" ] && [ -n "${CI_PROJECT_ID:-}" ]; then
         MRS=""
@@ -301,7 +308,7 @@ iam-apply:
             "$CI_API_V4_URL/projects/$CI_PROJECT_ID/repository/commits/$CI_COMMIT_SHA/merge_requests" || true)
         fi
         if [ -z "$TICKET" ]; then
-          TICKET=$(printf '%s' "$MRS" | grep -oE 'IAM-[0-9A-F]{16}' | head -1 || true)
+          TICKET=$(printf '%s' "$MRS" | grep -oiE 'IAM-[0-9A-F]{16}' | head -1 | tr '[:lower:]' '[:upper:]' || true)
         fi
         if [ -z "$BPIDS" ]; then
           BPIDS=$(printf '%s' "$MRS" | grep -oE 'Baseline-Publications: [0-9,]+' | head -1 | cut -d' ' -f2 || true)
