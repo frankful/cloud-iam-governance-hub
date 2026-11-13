@@ -170,6 +170,18 @@ loopback or behind a reverse proxy. The same applies to the AWS side: the
 runner gets short-lived credentials via GitHub OIDC and holds no long-lived
 AWS keys; the platform's own identity is read-only.
 
+**Out-of-band changes must be re-baselined immediately.** Once an account is
+under baseline management, a change made directly in the AWS console exists
+only in the live state — the repo and the Terraform state still hold the
+previous baseline, and the next `apply` reverts it. This includes the CI
+executor role's own permissions: a policy you add manually to unblock the
+runner is wiped by the next apply, and CI goes dark with every retry. After
+any manual console/CLI change on a managed account, run a fresh baseline
+(sync → publish → review → merge → apply) **before** applying anything else.
+With drift detection wired up, such changes surface as findings in the next
+plan/inventory report and can be acknowledged (re-baseline) or rolled back
+from the UI instead of relying on memory.
+
 ## Known limitations
 
 - No password login, OIDC/SSO, or self-service signup; provisioning is an
