@@ -1,0 +1,150 @@
+# .gitlab-ci.yml — GitLab CI 接线示例（cloud-iam-governance-hub）
+#
+# 本文件是实际部署在 GitLab 基线仓库的 .gitlab-ci.yml 存档（2026-11-12 版，
+# 首次走通 GitLab 全流程的版本）。下一版提交包含 2026-11-13 的
+# 「merge commit diff 无变更」修复与基线回调/import 哨兵，生产请用最新版。
+#
+# 放在基线仓库根目录（与 TF_ROOT 指向的目录同级）。平台负责发布分支/MR，
+# 这个 pipeline 负责逐账号 terraform init/plan/apply。
+#
+# 前提（GitLab CI/CD 变量，Masked+Protected）：
+#   STATE_BUCKET     state 桶名（沿用既有 state 时即原桶）
+#   STATE_REGION     state 桶的真实 region
+#   PLATFORM_URL     平台 API 地址（apply-result 回调用）
+#   PLATFORM_TOKEN   平台 token（最小权限，不要用 platform_admin token）
+# 手动变量（可选）：
+#   MODE=apply       手动 Run pipeline 时真正 apply（默认手动只 plan）
+#   DIFF_ALL=true    扫全部账号目录，不看 diff（首次验证 / 首次全量）
+#
+# 仓库结构：
+#   .gitlab-ci.yml
+#   iam/                      <- TF_ROOT（平台 MR 只改 iam/account-<id>/ 下的文件）
+#     versions.tf             <- 必须存在：backend "s3" {} 空块，缺了账号目录复制失败
+
+stages: [verify, deploy]
+
+# 手动变量在部分版本对 rules 不可见，rules 一律不依赖手动变量
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - when: never
+
+variables:
+  TF_ROOT: "iam"
+  STATE_KEY_PREFIX: "iam-governance-hub"
+  TF_IN_AUTOMATION: "1"
+  GIT_DEPTH: "0"
+  # MODE / DIFF_ALL 都是可选手动变量:
+  #   MODE=apply        → 手动跑时真正 apply（默认手动只 plan）
+  #   DIFF_ALL=true     → 扫全部账号目录，不看 diff（首次验证 / 首次全量）
+
+# 只有循环: 确定账号范围 → 逐账号 init/plan/apply
+.terraform-loop:
+  script:
+    # ① 确定本次要处理的账号目录
+    - |
+      set -eu
+      if [ "${DIFF_ALL:-false}" = "true" ]; then
+        # 首次验证 / 首次全量: 扫全部账号目录, 不看 diff
+        DIRS=$(cd "$TF_ROOT" && ls -d account-*/ 2>/dev/null | sed 's:/$::' | sort)
+      else
+        BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-$CI_COMMIT_BEFORE_SHA}"
+        case "$BASE" in
+          ""|"0000000000000000000000000000000000000000") RANGE="$CI_COMMIT_SHA^..$CI_COMMIT_SHA" ;;
+          *) RANGE="$BASE..$CI_COMMIT_SHA" ;;
+        esac
+        DIRS=$(git diff --name-only "$RANGE" -- "$TF_ROOT/account-*/" | cut -d/ -f2 | sort -u)
+      fi
+      if [ -z "$DIRS" ]; then echo "本次提交未改动 $TF_ROOT/account-*/, 跳过"; exit 0; fi
+      printf '待处理: %s\n' $DIRS
+      echo "$DIRS" > "$CI_PROJECT_DIR/accounts.txt"
+
+    # ② 逐账号 init / plan / apply
+    - |
+      set -eu
+      if [ "$CI_PIPELINE_SOURCE" = "push" ]; then RUN_MODE="${MODE:-apply}"; else RUN_MODE="${MODE:-plan}"; fi
+      echo "运行模式: $RUN_MODE"
+      while read -r a; do
+        [ -n "$a" ] || continue
+        d="$TF_ROOT/$a"
+        [ -f "$d/versions.tf" ] || cp -f "$TF_ROOT/versions.tf" "$d/"
+        set -- "$d"/*.tf
+        if [ "$1" = "$d/*.tf" ]; then
+          echo "✗ $d 下没有 .tf，检查目录与 GITLAB_TERRAFORM_PATH 是否一致"; exit 1
+        fi
+        echo "=== $a ==="
+        terraform -chdir="$d" init -input=false -reconfigure \
+          -backend-config="bucket=$STATE_BUCKET" \
+          -backend-config="key=$STATE_KEY_PREFIX/$a/iam/terraform.tfstate" \
+          -backend-config="region=$STATE_REGION" \
+          -backend-config="use_lockfile=true"
+        CODE=0
+        terraform -chdir="$d" plan -input=false -out=tfplan -detailed-exitcode || CODE=$?
+        case "$CODE" in
+          0) echo "$a: 无差异" ;;
+          2) echo "$a: 有变更" ;;
+          *) echo "✗ $a: plan 失败"; exit 1 ;;
+        esac
+        if [ "$RUN_MODE" = "plan" ]; then echo "$a: plan 模式，跳过 apply"; continue; fi
+        terraform -chdir="$d" apply -auto-approve -input=false tfplan
+      done < "$CI_PROJECT_DIR/accounts.txt"
+
+.terraform-base:
+  image:
+    name: hashicorp/terraform:1.13
+    entrypoint: [""]
+  tags: [iam-ci]
+  resource_group: iam-tfstate
+  timeout: 2h
+  before_script:
+    - ': "${STATE_BUCKET:?缺少 CI/CD 变量 STATE_BUCKET}"'
+    - ': "${STATE_REGION:?缺少 CI/CD 变量 STATE_REGION}"'
+  script:
+    - !reference [.terraform-loop, script]
+
+# MR pipeline: 只 plan, 无回调代码
+iam-plan:
+  extends: .terraform-base
+  stage: verify
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+# main 合并自动 apply; 手动 Run pipeline 默认只 plan
+iam-apply:
+  extends: .terraform-base
+  stage: deploy
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+  script:
+    - !reference [.terraform-loop, script]
+    - |
+      set -eu
+      if [ "$CI_PIPELINE_SOURCE" = "push" ]; then RUN_MODE="${MODE:-apply}"; else RUN_MODE="${MODE:-plan}"; fi
+      [ "$RUN_MODE" = "plan" ] && { echo "plan 模式，不回调"; exit 0; }
+      TICKET=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oE 'IAM-[0-9A-F]{16}' | head -1 || true)
+      if [ -z "$TICKET" ]; then echo "无工单号（基线人工提交），不回调"; exit 0; fi
+      BODY="{\"status\":\"succeeded\",\"commit_sha\":\"$CI_COMMIT_SHA\",\"ci_url\":\"$CI_JOB_URL\"}"
+      command -v curl >/dev/null 2>&1 \
+        && curl -sf -X POST "$PLATFORM_URL/api/v1/tickets/$TICKET/apply-result" \
+           -H "Authorization: Bearer $PLATFORM_TOKEN" -H "Content-Type: application/json" -d "$BODY" \
+        || wget -q -O- --header="Authorization: Bearer $PLATFORM_TOKEN" \
+             --header="Content-Type: application/json" --post-data="$BODY" \
+             "$PLATFORM_URL/api/v1/tickets/$TICKET/apply-result" \
+        || echo "⚠ 回调失败，工单 $TICKET 需人工关单"
+  after_script:
+    - |
+      [ "$CI_JOB_STATUS" = "failed" ] || exit 0
+      if [ "$CI_PIPELINE_SOURCE" = "push" ]; then RUN_MODE="${MODE:-apply}"; else RUN_MODE="${MODE:-plan}"; fi
+      [ "$RUN_MODE" = "plan" ] && exit 0
+      TICKET=$(printf '%s' "$CI_COMMIT_MESSAGE" | grep -oE 'IAM-[0-9A-F]{16}' | head -1 || true)
+      [ -n "$TICKET" ] || exit 0
+      BODY="{\"status\":\"failed\",\"commit_sha\":\"$CI_COMMIT_SHA\",\"ci_url\":\"$CI_JOB_URL\"}"
+      command -v curl >/dev/null 2>&1 \
+        && curl -sf -X POST "$PLATFORM_URL/api/v1/tickets/$TICKET/apply-result" \
+           -H "Authorization: Bearer $PLATFORM_TOKEN" -H "Content-Type: application/json" -d "$BODY" \
+        || wget -q -O- --header="Authorization: Bearer $PLATFORM_TOKEN" \
+             --header="Content-Type: application/json" --post-data="$BODY" \
+             "$PLATFORM_URL/api/v1/tickets/$TICKET/apply-result"
