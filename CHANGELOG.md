@@ -4,218 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 semantic versioning.
 
-## [Unreleased]
+## [0.1.0] — 2026-11-16
 
-### Added
-
-- Minimal CI workflow (go build/test, frontend tsc + build, gitleaks secret
-  scan) so external PRs get a gate and fixture regressions cannot silently
-  re-enter the tree.
-- Reference GitLab pipeline at `docs/examples/gitlab-ci.example.yml` (archived
-  from a real deployment): per-account `init/plan/apply` with S3 state, a
-  merge-commit-aware changed-directory computation, the
-  `Baseline-Publications` apply-result callback and the import+destroy
-  address-drift sentinel. The initial archive commit keeps the pre-fix
-  version for history; the follow-up commit fixes "merged MR reports no
-  changes": `git diff-tree`/`git show` return empty on merge commits, web
-  pipelines have a zero `CI_COMMIT_BEFORE_SHA`, and a trailing-slash glob
-  pathspec (`-- "iam/account-*/"`) can silently match nothing. The fix falls
-  back to the merge commit's first parent, drops the glob pathspec, and logs
-  the diff base and raw changed-file list so empty runs are diagnosable.
-  The callback layer now prints `METHOD url -> HTTP <code>` with a body
-  excerpt and an actionable conclusion, preflights `PLATFORM_URL` against the
-  public `/api/v1/auth/config` route, strips a trailing slash (it builds
-  `//api/v1/...`, which Gin answers with an opaque 42-byte not-found), and
-  normalises the ticket number to uppercase before calling back.
-
-### Fixed
-
-- Ticket lookups are now case-insensitive on the ticket number. Numbers are
-  generated as uppercase hex, but every lookup matched the stored value
-  exactly, so a CI callback carrying the lowercase form (a GitLab merge
-  commit's first line names the branch, not the title) got a 404 and the
-  ticket was never closed by the callback. Normalisation happens at the
-  service entry points, so close, approval, retry and polling paths all
-  accept the same input.
-- The GitLab per-file commit fallback compared the raw (base64-encoded) API
-  response against the desired plaintext, so the "content unchanged, skip"
-  short-circuit never matched and every retry re-committed identical files.
-  Content is decoded before comparing, matching the read path.
-- The inline-policy change form prefilled its editor from the managed-policy
-  endpoint, which never contains inline policies; the fetch failed silently
-  and the editor opened empty even though the inventory listed the policy. It
-  now uses the inline-policy endpoint, so selecting an inline policy prefills
-  its current document.
-- The drift table squeezed the resource/summary columns into one-character
-  vertical text on narrow windows; the table now scrolls horizontally instead
-  (the only page missing a `scroll.x`, now aligned with the other pages).
-- The GitLab publisher returned repository file content verbatim, but the
-  GitLab files API always encodes it as base64; HCL scanning/patching parsed
-  the encoded blob and failed with errors like
-  `membership.tf:1,453-453: Missing expression`. Content is now decoded
-  before use, matching the GitHub publisher.
-
-### Changed
-
-- Baseline declarations stop emitting first-time-adoption `import` blocks for
-  resources a previously *applied* baseline publication already owns. An
-  `import` block is a one-shot action: once the resource is in Terraform state
-  the leftover block is dead weight in every future diff and a real hazard
-  when a resource label drifts (the same object can be imported again under a
-  new address, leaving two state entries fighting each other). Adoption is
-  judged from baseline declarations joined with their publication's
-  `applied_at`; declared-but-not-yet-applied baselines keep their imports, and
-  adopted files converge back to pure declarations on the next re-baseline.
-  Baseline MR titles now carry a `Baseline-Publications: <id>[,<id>…]` trailer
-  so CI can post per-publication apply results to
-  `POST /aws/baseline-publications/:id/apply-result` (the GitLab default merge
-  commit includes only the MR title, hence the trailer lives there).
-
-- Test fixtures no longer use production resource naming from the internal
-  environment (real role, policy, group and ticket identifiers); placeholders
-  instead. The publish scanner now rejects these patterns.
-
-## [0.1.11] — 2026-11-10
-
-### Fixed
-
-- The cleanup report no longer suggests direct `aws iam delete-user` /
-  `delete-group` for resources declared in the baseline: those must be removed
-  via the IaC declaration file (delete file → PR → CI apply), otherwise the
-  next plan recreates them. Undeclared (platform-external) resources keep the
-  direct CLI action.
-
-## [0.1.10] — 2026-11-10
-
-### Added
-
-- The cleanup report now flags users that belong to no IAM group, mirroring
-  the empty-group rule: a pure orphan (no group, no attached/inline
-  policies) is listed as directly actionable (`aws iam delete-user`, with a
-  reminder to check for active access keys first), while a groupless user
-  that still carries policies is listed as review-required. zh-CN / en-US
-  translations included.
-
-## [0.1.9] — 2026-11-09
-
-### Changed
-
-- The api and sync-worker containers now run with `network_mode: host`.
-  Verified on an affected host: a `--network host` container reaches STS
-  while a bridge container (even with a lowered MTU) still gets TLS
-  "unexpected eof" — the host's transparent proxy/TUN only captures
-  host-local traffic, so bridge containers bypass it. With host networking
-  the containers inherit the working host path; the api binds
-  `0.0.0.0:${API_PORT}` directly and postgres/redis are reached on
-  `127.0.0.1` (their published ports), so the `ports:` block is gone.
-
-## [0.1.8] — 2026-11-09
-
-### Fixed
-
-- The "AWS account connectivity validation failed" response no longer
-  swallows the STS-level cause: the handler logs the underlying error
-  (AccessDenied vs. bad region vs. unreachable STS) at WARN.
-- `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` are now passed through to the
-  api and sync-worker containers. Runtime containers on the docker bridge
-  bypass host transparent-proxy/TUN devices — AWS calls fail with TLS
-  "unexpected eof" inside the container while the same request succeeds on
-  the host. Set `HTTPS_PROXY` in `.env` to a proxy listening on a
-  non-loopback address; `NO_PROXY` defaults to loopback + `postgres`/`redis`.
-
-## [0.1.7] — 2026-11-09
-
-### Fixed
-
-- The host's `~/.aws` directory is now mounted read-only into the api and
-  sync-worker containers (`/root/.aws`). The API previously exited at startup
-  when the entry credential came from a shared-config profile (e.g.
-  `AWS_PROFILE=iam-readonly`): the profile existed on the host but was never
-  visible inside the container. Hosts without `~/.aws` are unaffected — env
-  var credentials still work.
-
-## [0.1.6] — 2026-11-09
-
-### Fixed
-
-- Go compile parallelism is capped (`GOFLAGS=-p=2`) so small build VMs
-  (1-2 GB RAM, no swap) no longer get the toolchain OOM-killed — the build
-  step previously died with `signal: killed`. Bigger build machines can
-  restore full parallelism with `--build-arg GOFLAGS=-p=8`; adding swap is
-  the more durable fix.
-
-## [0.1.5] — 2026-11-09
-
-### Fixed
-
-- The compose build now runs with `network: host`. On hosts whose outbound
-  traffic goes through a transparent proxy / TUN device, `curl` works on the
-  host but every HTTPS fetch inside bridge-network build containers fails
-  with `EOF`; building on the host network stack fixes it. For a plain
-  `docker build`, pass `--network host`.
-
-## [0.1.4] — 2026-11-09
-
-### Changed
-
-- Go module downloads default to the upstream `proxy.golang.org` instead of
-  `goproxy.cn`, which EOFs on some networks. Mainland-China users can build
-  with `--build-arg GOPROXY=https://goproxy.cn,direct` (documented in the
-  Dockerfile comment and the README).
-
-## [0.1.3] — 2026-11-09
-
-### Fixed
-
-- The runtime stage no longer downloads anything at build time: the CA bundle
-  is copied out of the `golang:*-alpine` builder image (which already ships
-  `ca-certificates-bundle`), replacing the `apk --no-cache add
-  ca-certificates` step. The `APK_MIRROR` build arg is gone — on networks
-  where both `dl-cdn.alpinelinux.org` and HTTPS alpine mirrors are blocked
-  ("Permission denied" while fetching APKINDEX), the build now completes
-  regardless.
-
-### Added
-
-- AWS credential onboarding guide (`docs/aws-credential-setup.md`): the
-  two-layer identity model (entry identity vs. read-only collector role),
-  credential chains for EC2 instance roles, EKS IRSA and Roles Anywhere, a
-  recommended static-key setup for on-prem deployments, and a two-account
-  cross-account trust walkthrough with copy-paste trust policies.
-- Startup logs now name where the entry AWS credentials came from (env,
-  shared-config profile, instance metadata), without printing secrets, and
-  connectivity errors point at the new guide.
-
-### Changed
-
-- `.env.example` and the README spell out the full first-start must-change
-  list (`POSTGRES_PASSWORD`, `AUTH_MODE`, optional AWS auto-registration and
-  publisher settings); `AUTH_MODE` now defaults to `api-token` instead of
-  the loopback-only `development` mode.
-
-## [0.1.2] — 2026-11-09
-
-### Fixed
-
-- The runtime stage now defaults the alpine package mirror to TUNA
-  (`APK_MIRROR` build arg) instead of `dl-cdn.alpinelinux.org`, which is
-  unreachable on many corporate networks and made
-  `apk --no-cache add ca-certificates` fail with "unexpected eof" /
-  "Permission denied". Pass `--build-arg APK_MIRROR=default` to restore the
-  upstream CDN. Consistent with `GOPROXY` already defaulting to `goproxy.cn`.
-
-## [0.1.1] — 2026-11-09
-
-### Documentation
-
-- `.env.example` and the README now name the AWS managed `IAMReadOnlyAccess`
-  policy (ARN included) for the role the collector assumes, and state that
-  organization mode additionally needs `organizations:ListAccounts` on the
-  entry credential. Both previously said only "a read-only role".
-
-## [0.1.0] — initial public release
-
-First public snapshot of the platform.
+First tagged release. It consolidates the 0.1.x development snapshots that
+were published to `main` between 2026-11-09 and 2026-11-13 without tags; the
+per-snapshot detail lives in the git history.
 
 ### Added
 
@@ -227,13 +20,85 @@ First public snapshot of the platform.
 - Baseline publication to GitHub or GitLab: the account's declared state is
   rendered into one Terraform file per resource under `<path>/account-<id>/`,
   pushed as a branch and a pull request; conflicts and unchanged files are
-  classified before publishing.
+  classified before publishing. Baseline MR titles carry a
+  `Baseline-Publications: <id>[,<id>…]` trailer so CI can post per-publication
+  apply results to `POST /aws/baseline-publications/:id/apply-result`.
 - CI apply callbacks (`apply-result`) and CI drift reports
   (`drift-reports`), including post-apply `plan -detailed-exitcode`
   zero-change verification.
 - Drift detection with converge actions (accept the baseline or prefill an
   `UPDATE_*` ticket) and coverage reporting for accounts that were never
-  checked.
+  checked. The cleanup report flags users that belong to no IAM group, and
+  directs baseline-declared resources to the IaC declaration file (delete
+  file → PR → CI apply) instead of direct `aws iam delete-*` calls.
+- AWS credential onboarding guide (`docs/aws-credential-setup.md`): the
+  two-layer identity model (entry identity vs. read-only collector role),
+  credential chains for EC2 instance roles, EKS IRSA and Roles Anywhere, a
+  recommended static-key setup for on-prem deployments, and a two-account
+  cross-account trust walkthrough. Startup logs name where the entry AWS
+  credentials came from (env, shared-config profile, instance metadata)
+  without printing secrets.
+- Reference GitLab pipeline (`docs/examples/gitlab-ci.example.yml`, with an
+  English version `gitlab-ci.example.en.yml`): per-account `init/plan/apply`
+  with S3 state, merge-commit-aware changed-directory computation, the
+  `Baseline-Publications` callback, the import+destroy address-drift sentinel,
+  callback diagnostics (status code + response body, `PLATFORM_URL` preflight
+  and trailing-slash normalisation), and a boundary-anchored ticket-number
+  regex.
+- Minimal GitHub CI workflow (go build/test/vet, frontend tsc + build,
+  gitleaks secret scan) with least-privilege `permissions`.
 - Single container image for API and worker; the frontend is embedded into the
   API binary. `docker compose up -d --build` brings up Postgres, Redis, the API
   (auto-migrating) and the sync worker.
+
+### Changed
+
+- Baseline declarations stop emitting first-time-adoption `import` blocks for
+  resources a previously *applied* baseline publication already owns — a
+  leftover import block is dead weight in every future diff and a hazard when
+  a resource label drifts. Adoption is judged from baseline declarations
+  joined with their publication's `applied_at`.
+- `.env.example` and the README spell out the first-start must-change list;
+  `AUTH_MODE` defaults to `api-token` instead of the loopback-only
+  `development` mode, and the collector-role documentation names the AWS
+  managed `IAMReadOnlyAccess` policy.
+- Build/runtime networking on restrictive hosts: the compose build runs with
+  `network: host`, the api and sync-worker containers run with
+  `network_mode: host` and inherit `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`,
+  the host's `~/.aws` is mounted read-only, Go module downloads default to
+  upstream `proxy.golang.org` (mainland-China users can pass
+  `--build-arg GOPROXY=https://goproxy.cn,direct`), the alpine mirror and CA
+  bundle are taken from the builder image (no runtime downloads), and Go
+  compile parallelism is capped (`GOFLAGS=-p=2`) so small build VMs are not
+  OOM-killed.
+
+### Fixed
+
+- Ticket lookups are case-insensitive on the ticket number at every service
+  entry point. Numbers are generated as uppercase hex, but lookups matched the
+  stored value exactly, so a CI callback carrying the lowercase form (a GitLab
+  merge commit's first line names the branch) got a 404 and the ticket was
+  never closed by the callback.
+- The GitLab publisher decoded repository file content before comparing and
+  patching (the files API always returns base64): the per-file "content
+  unchanged, skip" short-circuit never matched, and HCL scanning failed with
+  errors like `membership.tf:1,453-453: Missing expression`.
+- The reference pipeline detects changes on merge commits: `git diff-tree` /
+  `git show` return empty on them, web pipelines have a zero
+  `CI_COMMIT_BEFORE_SHA`, and every `$()` pipeline is guarded against the
+  `set -e` + `pipefail` silent-exit when a grep finds no match.
+- The inline-policy change form prefills from the inline-policy endpoint
+  (previously the managed-policy endpoint, which never contains inline
+  policies, failed silently and opened an empty editor).
+- The "AWS account connectivity validation failed" response no longer swallows
+  the STS-level cause (AccessDenied vs. bad region vs. unreachable STS).
+- The drift table scrolls horizontally on narrow windows instead of squeezing
+  columns into one-character vertical text.
+
+### Security
+
+- Test fixtures, diagnostics tooling and comments no longer embed production
+  resource naming or real ticket identifiers from the internal environment;
+  the publish scanner rejects these patterns, and `scripts/publish-public.sh
+  --check` gates manual incremental publishes behind the same scan + build
+  check.
